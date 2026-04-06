@@ -1,0 +1,49 @@
+{
+  "_readme": "This is a sample ComfyUI API-format workflow for Article2Pod using VibeVoice. Replace this file with your own VibeVoice Single Speaker workflow exported from ComfyUI via Settings > Dev Mode > Save (API Format). Your workflow must contain a LoadAudio node, a LoadTextFromFileNode, and a SaveAudioMP3 node. Article2Pod will locate these automatically by class type regardless of node ID. See https://github.com/Enemyx-net/VibeVoice-ComfyUI for more information about the VibeVoice-ComfyUI nodes and usage.",
+
+  "1": {
+    "inputs": {
+      "audio": "your-voice-sample.mp3",
+      "audioUI": ""
+    },
+    "class_type": "LoadAudio",
+    "_meta": { "title": "Load Audio" }
+  },
+  "2": {
+    "inputs": {
+      "file": "input/article.txt"
+    },
+    "class_type": "LoadTextFromFileNode",
+    "_meta": { "title": "Load Text From File" }
+  },
+  "3": {
+    "inputs": {
+      "text": ["2", 0],
+      "model": "VibeVoice-Large-Q4",
+      "attention_type": "auto",
+      "quantize_llm": "4bit",
+      "free_memory_after_generate": true,
+      "diffusion_steps": 20,
+      "seed": 42,
+      "cfg_scale": 1.3,
+      "use_sampling": false,
+      "temperature": 0.95,
+      "top_p": 0.95,
+      "max_words_per_chunk": 250,
+      "voice_speed_factor": 0.98,
+      "voice_to_clone": ["1", 0]
+    },
+    "class_type": "VibeVoiceSingleSpeakerNode",
+    "_meta": { "title": "VibeVoice Single Speaker" }
+  },
+  "4": {
+    "inputs": {
+      "filename_prefix": "audio/podcast",
+      "quality": "128k",
+      "audioUI": "",
+      "audio": ["3", 0]
+    },
+    "class_type": "SaveAudioMP3",
+    "_meta": { "title": "Save Audio (MP3)" }
+  }
+}

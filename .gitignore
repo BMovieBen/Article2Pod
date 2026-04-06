@@ -1,0 +1,27 @@
+# User configuration
+config.json
+
+# User workflow
+workflow/workflow-api.json
+
+# Working files
+temp/
+log/
+log/track-log.json
+
+# Project files
+archive/
+roadmap.txt
+
+# Python
+scripts/__pycache__/
+__pycache__/
+*.pyc
+*.pyo
+
+# Voice samples and audio files
+*.mp3
+
+# OS
+.DS_Store
+Thumbs.db

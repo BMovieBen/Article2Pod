@@ -1,0 +1,7 @@
+requests
+readability-lxml
+beautifulsoup4
+Pillow
+mutagen
+pyperclip
+ddgs

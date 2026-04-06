@@ -1,0 +1,22 @@
+{
+  "voice_file": "your-voice-sample.mp3",
+  "clipboard_domains": [
+    "example-paywalled-site.com"
+  ],
+  "comfy_url": "http://127.0.0.1:8000",
+  "comfy_base": "C:\\ComfyUI",
+  "comfy_venv_python": "C:\\ComfyUI\\.venv\\Scripts\\python.exe",
+  "comfy_electron_relative": "Programs\\@comfyorgcomfyui-electron\\resources\\ComfyUI",
+  "comfy_startup_timeout": 120,
+  "workflow_file": "workflow\\workflow-api.json",
+  "audio_output_prefix": "audio/podcast",
+  "input_folder": "C:\\ComfyUI\\input",
+  "audio_folder": "C:\\ComfyUI\\output\\audio",
+  "output_folder": "C:\\ComfyUI\\output",
+  "podcasts_folder": "D:\\Podcasts",
+  "track_log": "log\\track-log.json",
+  "user_agent": "Mozilla/5.0",
+  "ad_strip_markers": [
+    "Example: Sign up for our newsletter"
+  ]
+}
