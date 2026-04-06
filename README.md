@@ -45,12 +45,12 @@ Article2Pod was vibe coded using AI (primarily Anthropic's Claude model).
 
 ### 1. Clone the repository
 ```powershell
-git clone https://github.com/BMovieBen/article2pod.git C:\ComfyUI\article2pod
+git clone https://github.com/BMovieBen/Article2Pod.git C:\ComfyUI\Article2Pod
 ```
 
 ### 2. Install Python dependencies
 ```powershell
-pip install -r C:\ComfyUI\article2pod\requirements.txt
+pip install -r requirements.txt
 ```
 
 ### 3. Configure
