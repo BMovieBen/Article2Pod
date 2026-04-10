@@ -7,7 +7,7 @@ import pyperclip
 from readability import Document
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
-from utils import safe_slug, clean_author, get_title, get_author, load_config, get_input_folder, get_temp_folder, get_user_agent, get_ad_strip_markers
+from utils import safe_slug, clean_author, get_title, get_author, load_config, get_input_folder, get_temp_folder, get_user_agent, get_ad_strip_markers, apply_phonetic_replacements
 
 INPUT_FOLDER  = get_input_folder()
 TEMP_FOLDER   = get_temp_folder()
@@ -205,6 +205,10 @@ def fetch_article(url):
     )
 
     txt_path = os.path.join(TEMP_FOLDER, f'{slug}.txt')
+
+    from utils import apply_phonetic_replacements
+    text = apply_phonetic_replacements(text)
+
     with open(txt_path, 'w', encoding='utf-8', newline='\r\n') as f:
         f.write(header + text)
 

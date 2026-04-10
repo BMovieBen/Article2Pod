@@ -150,3 +150,9 @@ def get_site_name(soup, base_url):
     if og and og.get('content', '').strip():
         return og['content'].strip()
     return urlparse(base_url).netloc.replace('www.', '')
+
+def apply_phonetic_replacements(text):
+    replacements = load_config().get('phonetic_replacements', {})
+    for phrase, phonetic in replacements.items():
+        text = text.replace(phrase, phonetic)
+    return text

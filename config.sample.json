@@ -18,5 +18,8 @@
   "user_agent": "Mozilla/5.0",
   "ad_strip_markers": [
     "Example: Sign up for our newsletter"
-  ]
+  ],
+  "phonetic_replacements": {
+    "2026": "twenty twenty six"
+  }
 }
