@@ -203,15 +203,22 @@ $slugs = @()
 
 while ($true) {
     Write-Host ""
-    Write-Host "(Press Enter without a URL to use clipboard/reader mode)" -ForegroundColor DarkGray
+    Write-Host "(Press Enter without a URL to use clipboard/reader mode, X to exit)" -ForegroundColor DarkGray
     $url = Read-Host "Enter article URL"
+
+    # --- Exit ---
+    if ($url.ToUpper() -eq "X") {
+        Write-Host ""
+        Write-Host "Exiting..." -ForegroundColor Yellow
+        Stop-ComfyUI
+        Stop-Process -Id $PID -Force
+    }
 
     # --- Step 1: Fetch article ---
     Write-Host ""
     Write-Host "--- Fetching article text ---" -ForegroundColor Cyan
     if ($url) {
         & python "$scriptsDir\fetch-article.py" $url
-
     } else {
         & python "$scriptsDir\fetch-article.py" --clipboard
     }
@@ -253,7 +260,13 @@ while ($true) {
     }
 
     Write-Host ""
-    $another = Read-Host "Add another article? [Y/N]"
+    $another = Read-Host "Add another article? [Y/N] (X to exit)"
+    if ($another.ToUpper() -eq "X") {
+        Write-Host ""
+        Write-Host "Exiting..." -ForegroundColor Yellow
+        Stop-ComfyUI
+        Stop-Process -Id $PID -Force
+    }
     if ($another.ToUpper() -ne "Y") {
         break
     }
