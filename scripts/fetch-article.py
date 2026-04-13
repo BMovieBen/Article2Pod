@@ -34,11 +34,24 @@ def is_blocked(title, text):
     combined = (title + ' ' + text).lower()
     return any(phrase in combined for phrase in BLOCK_INDICATORS) and len(text) < 500
 
+YOUTUBE_DOMAINS = ['youtube.com', 'youtu.be']
+
+def is_youtube_url(url):
+    domain = urlparse(url).netloc.replace('www.', '')
+    return any(domain == d or domain.endswith('.' + d) for d in YOUTUBE_DOMAINS)
+
+def get_youtube_video_id(url):
+    from urllib.parse import urlparse, parse_qs
+    parsed = urlparse(url)
+    if 'youtu.be' in parsed.netloc:
+        return parsed.path.lstrip('/')
+    return parse_qs(parsed.query).get('v', ['unknown'])[0]
+
 def clean_reader_mode_text(raw, title=''):
     lines = raw.splitlines()
     cleaned = []
     body_started = False
-    reading_time_pattern = re.compile(r'^\d+[\u2013\-]\d+\s+minutes?$', re.IGNORECASE)
+    reading_time_pattern = re.compile(r'^~?\d+[\u2013\-]\d+\s+minutes?$|^~\d+\s+minutes?$', re.IGNORECASE)
 
     junk_patterns = [
         re.compile(r'^\s*copyright\s', re.IGNORECASE),
@@ -97,16 +110,19 @@ def clean_reader_mode_text(raw, title=''):
 
 def extract_reader_mode_meta(raw):
     lines        = [l.strip() for l in raw.splitlines() if l.strip()]
-    reading_time = re.compile(r'^\d+[\u2013\-]\d+\s+minutes?$', re.IGNORECASE)
+    reading_time = re.compile(r'^~?\d+[\u2013\-]\d+\s+minutes?$|^~\d+\s+minutes?$', re.IGNORECASE)
+
     header_lines = []
     for line in lines:
         if reading_time.match(line):
             break
         header_lines.append(line)
+
     site   = header_lines[0] if len(header_lines) > 0 else ''
     title  = header_lines[1] if len(header_lines) > 1 else 'Untitled'
     author = header_lines[2] if len(header_lines) > 2 else 'Unknown Author'
     author = clean_author(author)
+
     return site, title, author
 
 def fetch_from_clipboard(url, forced=False):
@@ -155,7 +171,28 @@ def fetch_article(url):
     if not url:
         title, slug, author, text = fetch_from_clipboard(url, forced=True)
     else:
-        if is_clipboard_domain(url):
+        # YouTube — skip scraping entirely
+        if is_youtube_url(url):
+            print(f'  YouTube URL detected, will download audio directly.')
+            video_id = get_youtube_video_id(url)
+            slug     = f'youtube-{video_id}'
+            handoff  = {'youtube': True, 'source_url': url, 'slug': slug}
+            with open(os.path.join(TEMP_FOLDER, f'youtube-handoff-{slug}.json'), 'w', encoding='utf-8') as f:
+                json.dump(handoff, f)
+            # Minimal sidecar so ps1 slug collection works
+            meta = {
+                'title':      slug,
+                'artist':     '',
+                'album':      'YouTube',
+                'album_art':  None,
+                'slug':       slug,
+                'source_url': url,
+            }
+            with open(os.path.join(TEMP_FOLDER, f'{slug}.json'), 'w', encoding='utf-8') as f:
+                json.dump(meta, f, indent=2, ensure_ascii=False)
+            print(f'  Slug:     {slug}')
+            return slug
+        elif is_clipboard_domain(url):
             print(f'  Known unsupported site, switching to clipboard mode.')
             title, slug, author, text = fetch_from_clipboard(url, forced=False)
         else:

@@ -30,6 +30,8 @@ Article2Pod was vibe coded using AI (primarily Anthropic's Claude model).
 - **A VibeVoice model** downloaded into `ComfyUI/models/vibevoice/`
 - **Python 3.10+** — system Python (separate from ComfyUI's venv)
 - **An NVIDIA GPU** — required by VibeVoice
+- **ffmpeg** — installed and available on PATH. [Download here](https://ffmpeg.org/download.html) (only needed for YouTube links)
+- **yt-dlp** — installed via `pip install yt-dlp` or as a standalone executable on PATH  (only needed for YouTube links)
 
 ### Tested Configuration
 

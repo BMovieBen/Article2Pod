@@ -42,16 +42,25 @@ def fetch_and_resize_image(img_url, size=(500, 500)):
         return None
 
 def search_image(query):
-    """Search for an image using DuckDuckGo."""
-    try:
-        with DDGS() as ddgs:
-            results = list(ddgs.images(query, max_results=5))
-        for result in results:
-            img = fetch_and_resize_image(result['image'])
-            if img:
-                return img
-    except Exception:
-        pass
+    import time
+    # Try with progressively shorter queries if no results
+    queries = [
+        query,
+        ' '.join(query.split()[:6]),  # first 6 words
+        ' '.join(query.split()[:4]),  # first 4 words
+    ]
+    for q in queries:
+        try:
+            with DDGS() as ddgs:
+                results = list(ddgs.images(q, max_results=5))
+            if results:
+                for result in results:
+                    img = fetch_and_resize_image(result['image'])
+                    if img:
+                        return img
+        except Exception:
+            pass
+        time.sleep(1)  # brief pause between attempts
     return None
 
 def get_article_image(url, soup, title=''):
@@ -118,6 +127,17 @@ def find_embedded_audio(soup, url):
     return None
 
 def fetch_metadata(url):
+    # Skip for YouTube — metadata handled by fetch-youtube.py
+    import glob
+    youtube_handoffs = glob.glob(os.path.join(TEMP_FOLDER, 'youtube-handoff-*.json'))
+    for hf in youtube_handoffs:
+        with open(hf, 'r', encoding='utf-8') as f:
+            hdata = json.load(f)
+        if hdata.get('source_url') == url:
+            slug = hdata.get('slug')
+            print(f'  YouTube URL — metadata will be fetched during audio download.')
+            print(f'SLUG:{slug}')
+            return slug
     # Check for clipboard handoff from fetch-article (blocked site fallback)
     handoff_path     = os.path.join(INPUT_FOLDER, 'clipboard-handoff.json')
     clipboard_author = None

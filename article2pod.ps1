@@ -299,9 +299,33 @@ foreach ($slug in $slugs) {
     Write-Host "--- [$($slugs.IndexOf($slug) + 1)/$($slugs.Count)] $slug ---" -ForegroundColor Cyan
 
     $audioHandoff   = "$tempFolder\audio-handoff-$slug.json"
+    $youtubeHandoff = "$tempFolder\youtube-handoff-$slug.json"
     $hasDirectAudio = Test-Path $audioHandoff
+    $hasYoutube     = Test-Path $youtubeHandoff
 
-    if (-not $hasDirectAudio) {
+if ($hasYoutube) {
+        $handoffData = Get-Content $youtubeHandoff | ConvertFrom-Json
+        Write-Host "  Downloading YouTube audio..." -ForegroundColor Cyan
+        & python "$scriptsDir\fetch-youtube.py" $handoffData.source_url $slug
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  fetch-youtube failed for: $slug" -ForegroundColor Red
+            Read-Host "  Press Enter to continue"
+            $failCount++
+            continue
+        }
+        Remove-Item $youtubeHandoff -Force
+    } elseif ($hasDirectAudio) {
+        $handoffData = Get-Content $audioHandoff | ConvertFrom-Json
+        Write-Host "  Downloading audio directly..." -ForegroundColor Cyan
+        & python "$scriptsDir\fetch-audio.py" $handoffData.source_url $slug
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  fetch-audio failed for: $slug" -ForegroundColor Red
+            Read-Host "  Press Enter to continue"
+            $failCount++
+            continue
+        }
+        Remove-Item $audioHandoff -Force
+    } else {
         $slugTxt    = "$tempFolder\$slug.txt"
         $articleTxt = "$inputFolder\article.txt"
         if (-not (Test-Path $slugTxt)) {
@@ -319,19 +343,9 @@ foreach ($slug in $slugs) {
             $failCount++
             continue
         }
-    } else {
-        $handoffData = Get-Content $audioHandoff | ConvertFrom-Json
-        Write-Host "  Downloading audio directly..." -ForegroundColor Cyan
-        & python "$scriptsDir\fetch-audio.py" $handoffData.source_url $slug
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "  fetch-audio failed for: $slug" -ForegroundColor Red
-            Read-Host "  Press Enter to continue"
-            $failCount++
-            continue
-        }
-        Remove-Item $audioHandoff -Force
     }
 
+    # This must be OUTSIDE and AFTER the if/elseif/else block
     & python "$scriptsDir\tag-mp3.py" $slug
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  tag-mp3 failed for: $slug" -ForegroundColor Red
