@@ -76,6 +76,9 @@ def clean_reader_mode_text(raw, title=''):
         re.compile(r'^published\s+\w+\s+\d+,?\s+\d{4}', re.IGNORECASE),
         re.compile(r'^\w+\s+\d+,\s+\d{4},?\s+\d+:\d+\s+[AP]M', re.IGNORECASE),
         re.compile(r'^updated\s+\w+\s+\d+', re.IGNORECASE),
+        re.compile(r'^hide caption$', re.IGNORECASE),
+        re.compile(r'^toggle caption$', re.IGNORECASE),
+        re.compile(r'^\w[\w\s]+\s+for\s+(NPR|AP|Reuters|Getty|AFP)$', re.IGNORECASE),
     ]
 
     title_normalized = title.strip().lower() if title else ''
@@ -208,6 +211,14 @@ def fetch_article(url):
                 doc       = Document(r.text)
                 soup      = BeautifulSoup(doc.summary(), 'html.parser')
 
+                # Remove caption elements before extracting text
+                for tag in soup.find_all(['figcaption', 'figure']):
+                    tag.decompose()
+                for tag in soup.find_all(class_=lambda c: c and any(
+                    x in c.lower() for x in ['caption', 'credit', 'photo-credit', 'hide-caption', 'toggle-caption']
+                )):
+                    tag.decompose()
+
                 blocks = []
                 for tag in soup.find_all(['p', 'blockquote']):
                     text_content = tag.get_text(separator=' ', strip=True)
@@ -247,7 +258,7 @@ def fetch_article(url):
     text = apply_phonetic_replacements(text)
 
     with open(txt_path, 'w', encoding='utf-8', newline='\r\n') as f:
-        f.write(header + text)
+        f.write(header + text + '\r\n[pause:3000]')
 
     print(f'  Title:      {title}')
     print(f'  Author:     {author}')

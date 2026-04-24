@@ -76,9 +76,22 @@ def tag_mp3(mp3_path, meta, art_path, track_number):
 def move_mp3(mp3_path, slug, meta):
     site   = meta.get('album',  'Unknown Site')
     author = meta.get('artist', 'Unknown Author')
+    title  = meta.get('title',  'Untitled')
+
+    # Sanitize title for filename
+    safe_title = ''.join(c for c in title if c not in r'\/:*?"<>|').strip()
+
+    # Keep filename under 150 chars to leave room for folder path depth
+    site_part = sanitize(site)
+    max_title = 150 - len(site_part) - len(' - .mp3')
+    if max_title < 10:
+        max_title = 10
+    safe_title = safe_title[:max_title].rstrip()
+
+    filename    = f'{site_part} - {safe_title}.mp3'
     dest_folder = os.path.join(PODCASTS_FOLDER, sanitize(site), sanitize(author))
     os.makedirs(dest_folder, exist_ok=True)
-    dest_path = os.path.join(dest_folder, f'{slug}.mp3')
+    dest_path   = os.path.join(dest_folder, filename)
     shutil.move(mp3_path, dest_path)
     return dest_path
 
