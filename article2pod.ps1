@@ -169,6 +169,30 @@ Write-Host "     Article to Podcast" -ForegroundColor Cyan
 Write-Host "===============================" -ForegroundColor Cyan
 Write-Host ""
 
+# --- Check for saved queue before clearing temp ---
+$queueFile = "$appDir\queue.json"
+$slugs     = [System.Collections.ArrayList]@()
+$resuming  = $false
+
+if (Test-Path $queueFile) {
+    $savedQueue = Get-Content $queueFile | ConvertFrom-Json
+    if ($savedQueue -and $savedQueue.Count -gt 0) {
+        Write-Host ""
+        Write-Host "  Found saved queue from previous run:" -ForegroundColor Yellow
+        $savedQueue | ForEach-Object { Write-Host "    - $_" -ForegroundColor DarkGray }
+        Write-Host ""
+        $resume = Read-Host "  Resume this queue? [Y/N]"
+        if ($resume.ToUpper() -eq "Y") {
+            $slugs    = [System.Collections.ArrayList]@($savedQueue)
+            $resuming = $true
+            Write-Host "  Resumed $($slugs.Count) article(s) from saved queue." -ForegroundColor Green
+        } else {
+            Remove-Item $queueFile -Force
+            Write-Host "  Saved queue discarded." -ForegroundColor DarkGray
+        }
+    }
+}
+
 # --- Clear any stale MP3s from failed runs ---
 $staleAudio = Get-ChildItem "$audioFolder\*.mp3" -ErrorAction SilentlyContinue
 if ($staleAudio) {
@@ -176,14 +200,24 @@ if ($staleAudio) {
     Write-Host "  Cleared $($staleAudio.Count) stale audio file(s)."
 }
 
-# --- Ensure required folders exist and clear temp ---
-Write-Host "--- Clearing temp folder ---" -ForegroundColor Cyan
+# --- Ensure required folders exist and clear temp only if not resuming ---
 @("$appDir\workflow", "$appDir\log") | ForEach-Object {
     if (-not (Test-Path $_)) { New-Item -ItemType Directory -Path $_ | Out-Null }
 }
-if (Test-Path $tempFolder) { Remove-Item -Recurse -Force $tempFolder }
-New-Item -ItemType Directory -Path $tempFolder | Out-Null
-Write-Host "  Cleared: $tempFolder"
+
+if ($resuming) {
+    Write-Host "--- Keeping temp folder (resuming previous session) ---" -ForegroundColor Cyan
+    Write-Host "  Preserved: $tempFolder"
+    # Still create it if somehow missing
+    if (-not (Test-Path $tempFolder)) {
+        New-Item -ItemType Directory -Path $tempFolder | Out-Null
+    }
+} else {
+    Write-Host "--- Clearing temp folder ---" -ForegroundColor Cyan
+    if (Test-Path $tempFolder) { Remove-Item -Recurse -Force $tempFolder }
+    New-Item -ItemType Directory -Path $tempFolder | Out-Null
+    Write-Host "  Cleared: $tempFolder"
+}
 
 # --- Start ComfyUI in background immediately, don't wait ---
 Write-Host ""
@@ -193,25 +227,45 @@ Start-ComfyUI
 # ============================================================
 # URL INPUT LOOP
 # ============================================================
-
 Write-Host ""
 Write-Host "===============================" -ForegroundColor Cyan
 Write-Host "       Add Articles" -ForegroundColor Cyan
 Write-Host "===============================" -ForegroundColor Cyan
-
-$slugs = @()
+Write-Host ""
+Write-Host "  Enter a URL to add an article." -ForegroundColor DarkGray
+Write-Host "  Press Enter with no URL for clipboard/reader mode." -ForegroundColor DarkGray
+Write-Host "  G to stop adding and generate podcasts." -ForegroundColor DarkGray
+Write-Host "  X to cancel and exit." -ForegroundColor DarkGray
 
 while ($true) {
     Write-Host ""
-    Write-Host "(Press Enter without a URL to use clipboard/reader mode, X to exit)" -ForegroundColor DarkGray
-    $url = Read-Host "Enter article URL"
+    if ($slugs.Count -gt 0) {
+        Write-Host "  Queue: $($slugs.Count) article(s) ready." -ForegroundColor DarkGray
+    }
+    $url = Read-Host "URL"
 
     # --- Exit ---
     if ($url.ToUpper() -eq "X") {
         Write-Host ""
+        if ($slugs.Count -gt 0) {
+            $save = Read-Host "  Save current queue for next run? [Y/N]"
+            if ($save.ToUpper() -eq "Y") {
+                $slugs | ConvertTo-Json | Set-Content $queueFile
+                Write-Host "  Queue saved to $queueFile" -ForegroundColor Green
+            }
+        }
         Write-Host "Exiting..." -ForegroundColor Yellow
         Stop-ComfyUI
         Stop-Process -Id $PID -Force
+    }
+
+    # --- Generate ---
+    if ($url.ToUpper() -eq "G") {
+        if ($slugs.Count -eq 0) {
+            Write-Host "  No articles queued yet." -ForegroundColor Yellow
+            continue
+        }
+        break
     }
 
     # --- Step 1: Fetch article ---
@@ -245,11 +299,13 @@ while ($true) {
     # --- Collect the slug from temp ---
     $newJson = Get-ChildItem "$tempFolder\*.json" | Where-Object {
         $j = Get-Content $_.FullName | ConvertFrom-Json
-        $j.slug -notin $slugs -and $_.Name -notlike "audio-handoff-*"
+        $j.slug -notin $slugs -and $_.Name -notlike "audio-handoff-*" -and $_.Name -notlike "youtube-handoff-*"
     } | Select-Object -First 1
     if ($newJson) {
         $meta = Get-Content $newJson.FullName | ConvertFrom-Json
         $slugs += $meta.slug
+        # Save queue after every successful add
+        $slugs | ConvertTo-Json | Set-Content $queueFile
         Write-Host ""
         Write-Host "  Added: $($meta.slug)" -ForegroundColor Green
         Write-Host "  Queue: $($slugs.Count) article(s)" -ForegroundColor DarkGray
@@ -257,18 +313,6 @@ while ($true) {
         Write-Host "  Could not determine slug, skipping." -ForegroundColor Red
         Read-Host "  Press Enter to continue"
         continue
-    }
-
-    Write-Host ""
-    $another = Read-Host "Add another article? [Y/N] (X to exit)"
-    if ($another.ToUpper() -eq "X") {
-        Write-Host ""
-        Write-Host "Exiting..." -ForegroundColor Yellow
-        Stop-ComfyUI
-        Stop-Process -Id $PID -Force
-    }
-    if ($another.ToUpper() -ne "Y") {
-        break
     }
 }
 
@@ -293,6 +337,7 @@ Wait-ComfyUI
 
 $successCount = 0
 $failCount    = 0
+$failedSlugs  = [System.Collections.ArrayList]@()
 
 foreach ($slug in $slugs) {
     Write-Host ""
@@ -302,59 +347,79 @@ foreach ($slug in $slugs) {
     $youtubeHandoff = "$tempFolder\youtube-handoff-$slug.json"
     $hasDirectAudio = Test-Path $audioHandoff
     $hasYoutube     = Test-Path $youtubeHandoff
+    $stepFailed     = $false
 
-if ($hasYoutube) {
+    if ($hasYoutube) {
         $handoffData = Get-Content $youtubeHandoff | ConvertFrom-Json
         Write-Host "  Downloading YouTube audio..." -ForegroundColor Cyan
         & python "$scriptsDir\fetch-youtube.py" $handoffData.source_url $slug
         if ($LASTEXITCODE -ne 0) {
             Write-Host "  fetch-youtube failed for: $slug" -ForegroundColor Red
-            Read-Host "  Press Enter to continue"
-            $failCount++
-            continue
+            $stepFailed = $true
+        } else {
+            Remove-Item $youtubeHandoff -Force
         }
-        Remove-Item $youtubeHandoff -Force
     } elseif ($hasDirectAudio) {
         $handoffData = Get-Content $audioHandoff | ConvertFrom-Json
         Write-Host "  Downloading audio directly..." -ForegroundColor Cyan
         & python "$scriptsDir\fetch-audio.py" $handoffData.source_url $slug
         if ($LASTEXITCODE -ne 0) {
             Write-Host "  fetch-audio failed for: $slug" -ForegroundColor Red
-            Read-Host "  Press Enter to continue"
-            $failCount++
-            continue
+            $stepFailed = $true
+        } else {
+            Remove-Item $audioHandoff -Force
         }
-        Remove-Item $audioHandoff -Force
     } else {
         $slugTxt    = "$tempFolder\$slug.txt"
         $articleTxt = "$inputFolder\article.txt"
         if (-not (Test-Path $slugTxt)) {
             Write-Host "  txt file not found for slug: $slug, skipping." -ForegroundColor Red
-            Read-Host "  Press Enter to continue"
-            $failCount++
-            continue
+            $stepFailed = $true
+        } else {
+            Copy-Item $slugTxt $articleTxt -Force
+            & python "$scriptsDir\generate-audio.py" $slug
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "  generate-audio failed for: $slug" -ForegroundColor Red
+                $stepFailed = $true
+            }
         }
-        Copy-Item $slugTxt $articleTxt -Force
+    }
 
-        & python "$scriptsDir\generate-audio.py" $slug
+    if (-not $stepFailed) {
+        & python "$scriptsDir\tag-mp3.py" $slug
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "  generate-audio failed for: $slug" -ForegroundColor Red
-            Read-Host "  Press Enter to continue"
-            $failCount++
-            continue
+            Write-Host "  tag-mp3 failed for: $slug" -ForegroundColor Red
+            $stepFailed = $true
         }
     }
 
-    # This must be OUTSIDE and AFTER the if/elseif/else block
-    & python "$scriptsDir\tag-mp3.py" $slug
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "  tag-mp3 failed for: $slug" -ForegroundColor Red
-        Read-Host "  Press Enter to continue"
+    if ($stepFailed) {
         $failCount++
-        continue
+        [void]$failedSlugs.Add($slug)
+    } else {
+        $successCount++
     }
 
-    $successCount++
+    # Rewrite queue file with remaining unprocessed + failed slugs
+    $processedIndex = $slugs.IndexOf($slug)
+    $unprocessed    = [System.Collections.ArrayList]@($slugs | Select-Object -Skip ($processedIndex + 1))
+    $failedSlugs | ForEach-Object { [void]$unprocessed.Add($_) }
+    if ($unprocessed.Count -gt 0) {
+        $unprocessed | ConvertTo-Json | Set-Content $queueFile
+    } else {
+        if (Test-Path $queueFile) { Remove-Item $queueFile -Force }
+    }
+}
+
+# --- Save failed slugs back to queue file for retry ---
+if ($failedSlugs.Count -gt 0) {
+    $failedSlugs | ConvertTo-Json | Set-Content $queueFile
+    Write-Host ""
+    Write-Host "  $($failedSlugs.Count) article(s) failed and saved to queue for retry." -ForegroundColor Yellow
+    Write-Host "  Run the script again to retry them." -ForegroundColor Yellow
+} else {
+    # All succeeded — clear the queue file
+    if (Test-Path $queueFile) { Remove-Item $queueFile -Force }
 }
 
 # ============================================================

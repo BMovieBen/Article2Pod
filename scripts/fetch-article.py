@@ -208,44 +208,68 @@ def fetch_article(url):
                 title, slug, author, text = fetch_from_clipboard(url, forced=False)
             else:
                 full_soup = BeautifulSoup(r.text, 'html.parser')
-                doc       = Document(r.text)
-                soup      = BeautifulSoup(doc.summary(), 'html.parser')
 
-                # Remove caption elements before extracting text
-                for tag in soup.find_all(['figcaption', 'figure']):
-                    tag.decompose()
-                for tag in soup.find_all(class_=lambda c: c and any(
-                    x in c.lower() for x in ['caption', 'credit', 'photo-credit', 'hide-caption', 'toggle-caption']
-                )):
-                    tag.decompose()
-
-                blocks = []
-                for tag in soup.find_all(['p', 'blockquote']):
-                    text_content = tag.get_text(separator=' ', strip=True)
-                    if not text_content:
-                        continue
-                    if tag.name == 'blockquote':
-                        lines        = text_content.splitlines()
-                        text_content = '\r\n'.join(f'    {line}' for line in lines)
-                    blocks.append(text_content)
-
-                text = '\r\n'.join(blocks)
-                text = re.sub(r'(\r\n){3,}', '\r\n\r\n', text)
-
-                for marker in get_ad_strip_markers():
-                    ad_index = text.find(marker)
-                    if ad_index != -1:
-                        text = text[:ad_index].rstrip()
-                        break
-
-                title  = get_title(full_soup, doc)
-                author = get_author(full_soup)
-
-                if is_blocked(title, text):
-                    print(f'  Warning: site appears to be blocking scraping.')
+                # Guard against empty or JS-rendered pages
+                if not r.text or len(r.text.strip()) < 200:
+                    print(f'  Page appears empty or JS-rendered, switching to clipboard mode.')
                     title, slug, author, text = fetch_from_clipboard(url, forced=False)
                 else:
-                    slug = safe_slug(title)
+                    try:
+                        clean_soup = BeautifulSoup(r.text, 'html.parser')
+                        for selector in [
+                            '[class*="share"]', '[class*="related"]',
+                            '[class*="recommended"]', '[class*="newsletter"]',
+                            '[class*="sidebar"]', '[class*="aside"]',
+                            '[class*="widget"]', '[class*="promo"]',
+                            '[class*="ad-"]', '[class*="-ad"]',
+                            '[id*="sidebar"]', '[id*="related"]',
+                            'aside', 'footer', 'nav',
+                        ]:
+                            for tag in clean_soup.select(selector):
+                                tag.decompose()
+
+                        doc  = Document(r.text)
+                        soup = BeautifulSoup(Document(str(clean_soup)).summary(), 'html.parser')
+
+                        blocks = []
+                        seen   = set()
+                        for tag in soup.find_all(['p', 'blockquote']):
+                            text_content = tag.get_text(separator=' ', strip=True)
+                            if not text_content:
+                                continue
+                            normalized = ' '.join(text_content.lower().split())
+                            if normalized in seen:
+                                continue
+                            if any(normalized in s or s in normalized
+                                   for s in seen if len(s) > 50):
+                                continue
+                            seen.add(normalized)
+                            if tag.name == 'blockquote':
+                                lines        = text_content.splitlines()
+                                text_content = '\r\n'.join(f'    {line}' for line in lines)
+                            blocks.append(text_content)
+
+                        text = '\r\n'.join(blocks)
+                        text = re.sub(r'(\r\n){3,}', '\r\n\r\n', text)
+
+                        for marker in get_ad_strip_markers():
+                            ad_index = text.find(marker)
+                            if ad_index != -1:
+                                text = text[:ad_index].rstrip()
+                                break
+
+                        title  = get_title(full_soup, doc)
+                        author = get_author(full_soup)
+
+                        if is_blocked(title, text):
+                            print(f'  Warning: site appears to be blocking scraping.')
+                            title, slug, author, text = fetch_from_clipboard(url, forced=False)
+                        else:
+                            slug = safe_slug(title)
+
+                    except Exception as e:
+                        print(f'  Readability error: {e}, switching to clipboard mode.')
+                        title, slug, author, text = fetch_from_clipboard(url, forced=False)
 
     header = (
         title + '\r\n' +

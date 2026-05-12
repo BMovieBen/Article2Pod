@@ -65,6 +65,8 @@ def safe_slug(title, max_len=50):
     s = title.lower()
     s = re.sub(r'\s+', '-', s)
     s = re.sub(r'[^a-z0-9\-]', '', s)
+    s = re.sub(r'-{2,}', '-', s)   # collapse multiple dashes
+    s = s.strip('-')                 # strip leading/trailing dashes
     return s[:max_len]
 
 def clean_author(text):
@@ -83,7 +85,9 @@ def get_title(soup, doc):
     # 1. Try <h1> first — most reliable for actual article title
     h1 = soup.find('h1')
     if h1:
-        text = h1.get_text(strip=True)
+        text = h1.get_text(separator=' ', strip=True)
+        # Normalize multiple spaces that can result from nested tags
+        text = re.sub(r'  +', ' ', text)
         if text and len(text) > 5:
             return text
 
@@ -156,3 +160,7 @@ def apply_phonetic_replacements(text):
     for phrase, phonetic in replacements.items():
         text = text.replace(phrase, phonetic)
     return text
+
+def get_queue_file():
+    filename = load_config().get('queue_file', 'queue.json')
+    return os.path.join(APP_DIR, filename)
