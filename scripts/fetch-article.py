@@ -130,18 +130,18 @@ def extract_reader_mode_meta(raw):
 
 def fetch_from_clipboard(url, forced=False):
     print()
-    print('  ╔══════════════════════════════════════════════════════╗')
+    print('  +------------------------------------------------------+')
     if forced:
-        print('  ║  Clipboard/reader mode selected.                    ║')
+        print('  |  Clipboard/reader mode selected.                    |')
     else:
-        print('  ║  This site is blocking automated scraping.          ║')
-    print('  ║                                                      ║')
-    print('  ║  To continue:                                        ║')
-    print('  ║  1. Open the URL in your browser                     ║')
-    print('  ║  2. Switch to READER MODE (F9 in Firefox/Edge)       ║')
-    print('  ║  3. Select All (Ctrl+A) and Copy (Ctrl+C)            ║')
-    print('  ║  4. Come back here and press Enter                   ║')
-    print('  ╚══════════════════════════════════════════════════════╝')
+        print('  |  This site is blocking automated scraping.          |')
+    print('  |                                                      |')
+    print('  |  To continue:                                        |')
+    print('  |  1. Open the URL in your browser                     |')
+    print('  |  2. Switch to READER MODE (F9 in Firefox/Edge)       |')
+    print('  |  3. Select All (Ctrl+A) and Copy (Ctrl+C)            |')
+    print('  |  4. Come back here and press Enter                   |')
+    print('  +------------------------------------------------------+')
     print()
     input('  Press Enter when clipboard is ready...')
 

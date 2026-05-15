@@ -104,7 +104,7 @@ def wait_for_completion(prompt_id, timeout=3600):
     print(f'  Generating audio...')
     elapsed  = 0
     interval = 5
-    spinner  = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏']
+    spinner  = ['-', '\\', '|', '/']
     spin_idx = 0
 
     while elapsed < timeout:
@@ -140,7 +140,7 @@ def rename_output(slug):
     newest   = files[0]
     dest     = os.path.join(AUDIO_FOLDER, f'{slug}.mp3')
     os.replace(newest, dest)
-    print(f'  Renamed:  {os.path.basename(newest)} → {slug}.mp3')
+    print(f'  Renamed:  {os.path.basename(newest)} -> {slug}.mp3')
     return dest
 
 def main(slug):

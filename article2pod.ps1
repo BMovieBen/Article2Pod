@@ -233,9 +233,9 @@ Write-Host "       Add Articles" -ForegroundColor Cyan
 Write-Host "===============================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Enter a URL to add an article." -ForegroundColor DarkGray
-Write-Host "  Press Enter with no URL for clipboard/reader mode." -ForegroundColor DarkGray
-Write-Host "  G to stop adding and generate podcasts." -ForegroundColor DarkGray
-Write-Host "  X to cancel and exit." -ForegroundColor DarkGray
+Write-Host "  C  to use clipboard/reader mode." -ForegroundColor DarkGray
+Write-Host "  Enter with no input to generate podcasts." -ForegroundColor DarkGray
+Write-Host "  X  to cancel and exit." -ForegroundColor DarkGray
 
 while ($true) {
     Write-Host ""
@@ -260,12 +260,17 @@ while ($true) {
     }
 
     # --- Generate ---
-    if ($url.ToUpper() -eq "G") {
+    if ($url -eq "") {
         if ($slugs.Count -eq 0) {
             Write-Host "  No articles queued yet." -ForegroundColor Yellow
             continue
         }
         break
+    }
+
+    # --- Clipboard mode ---
+    if ($url.ToUpper() -eq "C") {
+        $url = ""
     }
 
     # --- Step 1: Fetch article ---
@@ -304,7 +309,6 @@ while ($true) {
     if ($newJson) {
         $meta = Get-Content $newJson.FullName | ConvertFrom-Json
         $slugs += $meta.slug
-        # Save queue after every successful add
         $slugs | ConvertTo-Json | Set-Content $queueFile
         Write-Host ""
         Write-Host "  Added: $($meta.slug)" -ForegroundColor Green
@@ -332,6 +336,60 @@ Write-Host "===============================" -ForegroundColor Cyan
 Write-Host "     Generating $($slugs.Count) Podcast(s)" -ForegroundColor Cyan
 Write-Host "===============================" -ForegroundColor Cyan
 
+# --- Log setup ---
+$logLevel = $config.log_level
+if (-not $logLevel) { $logLevel = "off" }
+$logFile  = "$appDir\log\generation.log"
+
+function Write-Log {
+    param([string]$Message, [string]$Level = "info")
+    if ($logLevel -eq "off") { return }
+    if ($logLevel -eq "on_error" -and $Level -ne "error") { return }
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    Add-Content -Path $logFile -Value "[$timestamp] $Message"
+}
+
+function Run-PythonStep {
+    param([string]$StepName, [string[]]$Arguments)
+    Write-Host "  $StepName..." -ForegroundColor Cyan
+    Write-Log "  STEP: $StepName"
+    $output = & python @Arguments 2>&1
+    $output | ForEach-Object {
+        Write-Host "  $_"
+        Write-Log "    $_"
+    }
+    if ($LASTEXITCODE -ne 0) {
+        $errMsg = "FAILED: $StepName (exit code $LASTEXITCODE)"
+        Write-Host "  $errMsg" -ForegroundColor Red
+        # Always log failures regardless of log level
+        if ($logLevel -ne "off") {
+            $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+            Add-Content -Path $logFile -Value "[$timestamp]   $errMsg"
+            # On error, also flush the buffered output for this step
+            if ($logLevel -eq "on_error") {
+                $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                Add-Content -Path $logFile -Value "[$timestamp]   --- Output for failed step ---"
+                $output | ForEach-Object {
+                    Add-Content -Path $logFile -Value "[$timestamp]     $_"
+                }
+            }
+        }
+        return $false
+    }
+    Write-Log "  OK: $StepName"
+    return $true
+}
+
+# --- Log session start ---
+if ($logLevel -ne "off") {
+    $sessionStart = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    Add-Content -Path $logFile -Value ""
+    Add-Content -Path $logFile -Value "================================================"
+    Add-Content -Path $logFile -Value "SESSION START: $sessionStart  [log_level: $logLevel]"
+    Add-Content -Path $logFile -Value "Queued: $($slugs.Count) article(s)"
+    Add-Content -Path $logFile -Value "================================================"
+}
+
 # --- Wait for ComfyUI now if it isn't ready yet ---
 Wait-ComfyUI
 
@@ -342,6 +400,7 @@ $failedSlugs  = [System.Collections.ArrayList]@()
 foreach ($slug in $slugs) {
     Write-Host ""
     Write-Host "--- [$($slugs.IndexOf($slug) + 1)/$($slugs.Count)] $slug ---" -ForegroundColor Cyan
+    Write-Log "--- ARTICLE: $slug ---"
 
     $audioHandoff   = "$tempFolder\audio-handoff-$slug.json"
     $youtubeHandoff = "$tempFolder\youtube-handoff-$slug.json"
@@ -351,53 +410,55 @@ foreach ($slug in $slugs) {
 
     if ($hasYoutube) {
         $handoffData = Get-Content $youtubeHandoff | ConvertFrom-Json
-        Write-Host "  Downloading YouTube audio..." -ForegroundColor Cyan
-        & python "$scriptsDir\fetch-youtube.py" $handoffData.source_url $slug
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "  fetch-youtube failed for: $slug" -ForegroundColor Red
-            $stepFailed = $true
-        } else {
+        $result = Run-PythonStep "Downloading YouTube audio" @("$scriptsDir\fetch-youtube.py", $handoffData.source_url, $slug)
+        if ($result) {
             Remove-Item $youtubeHandoff -Force
+        } else {
+            $stepFailed = $true
         }
     } elseif ($hasDirectAudio) {
         $handoffData = Get-Content $audioHandoff | ConvertFrom-Json
-        Write-Host "  Downloading audio directly..." -ForegroundColor Cyan
-        & python "$scriptsDir\fetch-audio.py" $handoffData.source_url $slug
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "  fetch-audio failed for: $slug" -ForegroundColor Red
-            $stepFailed = $true
-        } else {
+        $result = Run-PythonStep "Downloading audio" @("$scriptsDir\fetch-audio.py", $handoffData.source_url, $slug)
+        if ($result) {
             Remove-Item $audioHandoff -Force
+        } else {
+            $stepFailed = $true
         }
     } else {
         $slugTxt    = "$tempFolder\$slug.txt"
         $articleTxt = "$inputFolder\article.txt"
         if (-not (Test-Path $slugTxt)) {
-            Write-Host "  txt file not found for slug: $slug, skipping." -ForegroundColor Red
+            $msg = "txt file not found for slug: $slug"
+            Write-Host "  $msg" -ForegroundColor Red
+            if ($logLevel -ne "off") {
+                $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                Add-Content -Path $logFile -Value "[$timestamp]   FAILED: $msg"
+            }
             $stepFailed = $true
         } else {
             Copy-Item $slugTxt $articleTxt -Force
-            & python "$scriptsDir\generate-audio.py" $slug
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "  generate-audio failed for: $slug" -ForegroundColor Red
-                $stepFailed = $true
-            }
+            $result = Run-PythonStep "Generating audio via ComfyUI" @("$scriptsDir\generate-audio.py", $slug)
+            if (-not $result) { $stepFailed = $true }
         }
     }
 
     if (-not $stepFailed) {
-        & python "$scriptsDir\tag-mp3.py" $slug
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "  tag-mp3 failed for: $slug" -ForegroundColor Red
-            $stepFailed = $true
-        }
+        $result = Run-PythonStep "Tagging and moving MP3" @("$scriptsDir\tag-mp3.py", $slug)
+        if (-not $result) { $stepFailed = $true }
     }
 
     if ($stepFailed) {
         $failCount++
         [void]$failedSlugs.Add($slug)
+        Write-Host "  FAILED: $slug" -ForegroundColor Red
+        if ($logLevel -ne "off") {
+            $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+            Add-Content -Path $logFile -Value "[$timestamp]   RESULT: FAILED"
+        }
     } else {
         $successCount++
+        Write-Host "  Done: $slug" -ForegroundColor Green
+        Write-Log "  RESULT: SUCCESS"
     }
 
     # Rewrite queue file with remaining unprocessed + failed slugs
@@ -411,15 +472,18 @@ foreach ($slug in $slugs) {
     }
 }
 
-# --- Save failed slugs back to queue file for retry ---
-if ($failedSlugs.Count -gt 0) {
-    $failedSlugs | ConvertTo-Json | Set-Content $queueFile
-    Write-Host ""
-    Write-Host "  $($failedSlugs.Count) article(s) failed and saved to queue for retry." -ForegroundColor Yellow
-    Write-Host "  Run the script again to retry them." -ForegroundColor Yellow
-} else {
-    # All succeeded — clear the queue file
-    if (Test-Path $queueFile) { Remove-Item $queueFile -Force }
+# --- Log session end ---
+if ($logLevel -ne "off") {
+    $sessionEnd = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    Add-Content -Path $logFile -Value ""
+    Add-Content -Path $logFile -Value "================================================"
+    Add-Content -Path $logFile -Value "SESSION END: $sessionEnd"
+    Add-Content -Path $logFile -Value "Succeeded: $successCount  Failed: $failCount"
+    if ($failedSlugs.Count -gt 0) {
+        Add-Content -Path $logFile -Value "Failed articles:"
+        $failedSlugs | ForEach-Object { Add-Content -Path $logFile -Value "  - $_" }
+    }
+    Add-Content -Path $logFile -Value "================================================"
 }
 
 # ============================================================
