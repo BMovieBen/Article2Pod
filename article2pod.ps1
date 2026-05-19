@@ -17,18 +17,18 @@ $config = Get-Content $configPath | ConvertFrom-Json
 $comfyBase       = $config.comfy_base
 $comfyPython     = $config.comfy_venv_python
 $comfyApiUrl     = $config.comfy_url
-$comfyPort  = ([System.Uri]$comfyApiUrl).Port
+$comfyPort       = ([System.Uri]$comfyApiUrl).Port
 $comfyTimeout    = $config.comfy_startup_timeout
-$tempFolder = "$appDir\temp"
+$tempFolder      = "$appDir\temp"
 $audioFolder     = $config.audio_folder
 $inputFolder     = $config.input_folder
 $outputFolder    = $config.output_folder
 
 # --- Resolve Electron paths dynamically ---
-$electronBase    = "$env:LOCALAPPDATA\$($config.comfy_electron_relative)"
-$comfyMain       = "$electronBase\main.py"
-$comfyFrontEnd   = "$electronBase\web_custom_versions\desktop_app"
-$comfyExtraModels= "$env:APPDATA\ComfyUI\extra_models_config.yaml"
+$electronBase     = "$env:LOCALAPPDATA\$($config.comfy_electron_relative)"
+$comfyMain        = "$electronBase\main.py"
+$comfyFrontEnd    = "$electronBase\web_custom_versions\desktop_app"
+$comfyExtraModels = "$env:APPDATA\ComfyUI\extra_models_config.yaml"
 
 # --- Ensure Python is available ---
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
@@ -79,7 +79,7 @@ function Test-ComfyUI {
     }
 }
 
-# --- Function: Start ComfyUI in background (don't wait) ---
+# --- Function: Start ComfyUI in background ---
 function Start-ComfyUI {
     if (Test-ComfyUI) {
         Write-Host "  ComfyUI already running." -ForegroundColor Green
@@ -159,6 +159,57 @@ function Stop-ComfyUI {
     Write-Host "  ComfyUI stopped." -ForegroundColor Gray
 }
 
+# --- Queue helpers ---
+$queueFile = "$appDir\queue.json"
+$slugs     = [System.Collections.ArrayList]@()
+$resuming  = $false
+
+function Load-Queue {
+    if (-not (Test-Path $queueFile)) { return @() }
+    $raw = Get-Content $queueFile | ConvertFrom-Json
+    if (-not $raw) { return @() }
+    $items = @()
+    foreach ($item in $raw) {
+        if ($item -is [string]) {
+            $items += [PSCustomObject]@{
+                slug       = $item
+                status     = 'pending'
+                title      = $item
+                artist     = ''
+                album      = ''
+                album_art  = $null
+                source_url = ''
+                error      = $null
+            }
+        } else {
+            if ($item.status -eq 'processing') { $item.status = 'pending' }
+            $items += $item
+        }
+    }
+    return $items
+}
+
+function Save-Queue($items) {
+    $items | ConvertTo-Json -Depth 5 | Set-Content $queueFile
+}
+
+function Clean-OrphanedTemp {
+    if (-not (Test-Path $tempFolder)) { return }
+    $validSlugs = $allItems | ForEach-Object { $_.slug }
+    Get-ChildItem $tempFolder | ForEach-Object {
+        $base = $_.BaseName
+        foreach ($prefix in @('audio-handoff-', 'youtube-handoff-')) {
+            $base = $base -replace "^$prefix", ''
+        }
+        if ($base -notin $validSlugs) {
+            Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+            if ($logLevel -eq 'verbose') {
+                Write-Log "Removed orphaned temp file: $($_.Name)"
+            }
+        }
+    }
+}
+
 # ============================================================
 # STARTUP
 # ============================================================
@@ -169,28 +220,39 @@ Write-Host "     Article to Podcast" -ForegroundColor Cyan
 Write-Host "===============================" -ForegroundColor Cyan
 Write-Host ""
 
-# --- Check for saved queue before clearing temp ---
-$queueFile = "$appDir\queue.json"
-$slugs     = [System.Collections.ArrayList]@()
-$resuming  = $false
+# --- Ensure required folders exist ---
+@("$appDir\workflow", "$appDir\log") | ForEach-Object {
+    if (-not (Test-Path $_)) { New-Item -ItemType Directory -Path $_ | Out-Null }
+}
 
-if (Test-Path $queueFile) {
-    $savedQueue = Get-Content $queueFile | ConvertFrom-Json
-    if ($savedQueue -and $savedQueue.Count -gt 0) {
-        Write-Host ""
-        Write-Host "  Found saved queue from previous run:" -ForegroundColor Yellow
-        $savedQueue | ForEach-Object { Write-Host "    - $_" -ForegroundColor DarkGray }
-        Write-Host ""
-        $resume = Read-Host "  Resume this queue? [Y/N]"
-        if ($resume.ToUpper() -eq "Y") {
-            $slugs    = [System.Collections.ArrayList]@($savedQueue)
-            $resuming = $true
-            Write-Host "  Resumed $($slugs.Count) article(s) from saved queue." -ForegroundColor Green
-        } else {
-            Remove-Item $queueFile -Force
-            Write-Host "  Saved queue discarded." -ForegroundColor DarkGray
+# --- Load and process queue ---
+$allItems     = Load-Queue
+$allItems     = @($allItems | Where-Object { $_.status -ne 'done' })
+$pendingItems = @($allItems | Where-Object { $_.status -in @('pending', 'failed') })
+
+if ($pendingItems.Count -gt 0) {
+    Write-Host "  Found $($pendingItems.Count) article(s) in saved queue:" -ForegroundColor Yellow
+    $pendingItems | ForEach-Object { Write-Host "    - $($_.slug)" -ForegroundColor DarkGray }
+    Write-Host ""
+    $resume = Read-Host "  Resume this queue? [Y/N]"
+    if ($resume.ToUpper() -eq "Y") {
+        $pendingItems | ForEach-Object { [void]$slugs.Add($_.slug) }
+        $resuming = $true
+        Write-Host "  Resumed $($slugs.Count) article(s)." -ForegroundColor Green
+        if (-not (Test-Path $tempFolder)) {
+            New-Item -ItemType Directory -Path $tempFolder | Out-Null
         }
+        Clean-OrphanedTemp
+    } else {
+        Remove-Item $queueFile -Force -ErrorAction SilentlyContinue
+        if (Test-Path $tempFolder) { Remove-Item -Recurse -Force $tempFolder }
+        New-Item -ItemType Directory -Path $tempFolder | Out-Null
+        Write-Host "  Queue discarded." -ForegroundColor DarkGray
     }
+} else {
+    if (Test-Path $tempFolder) { Remove-Item -Recurse -Force $tempFolder }
+    New-Item -ItemType Directory -Path $tempFolder | Out-Null
+    Write-Host "--- Cleared temp folder ---" -ForegroundColor Cyan
 }
 
 # --- Clear any stale MP3s from failed runs ---
@@ -199,30 +261,6 @@ if ($staleAudio) {
     $staleAudio | Remove-Item -Force
     Write-Host "  Cleared $($staleAudio.Count) stale audio file(s)."
 }
-
-# --- Ensure required folders exist and clear temp only if not resuming ---
-@("$appDir\workflow", "$appDir\log") | ForEach-Object {
-    if (-not (Test-Path $_)) { New-Item -ItemType Directory -Path $_ | Out-Null }
-}
-
-if ($resuming) {
-    Write-Host "--- Keeping temp folder (resuming previous session) ---" -ForegroundColor Cyan
-    Write-Host "  Preserved: $tempFolder"
-    # Still create it if somehow missing
-    if (-not (Test-Path $tempFolder)) {
-        New-Item -ItemType Directory -Path $tempFolder | Out-Null
-    }
-} else {
-    Write-Host "--- Clearing temp folder ---" -ForegroundColor Cyan
-    if (Test-Path $tempFolder) { Remove-Item -Recurse -Force $tempFolder }
-    New-Item -ItemType Directory -Path $tempFolder | Out-Null
-    Write-Host "  Cleared: $tempFolder"
-}
-
-# --- Start ComfyUI in background immediately, don't wait ---
-Write-Host ""
-Write-Host "--- Starting ComfyUI in background ---" -ForegroundColor Cyan
-Start-ComfyUI
 
 # ============================================================
 # URL INPUT LOOP
@@ -250,7 +288,22 @@ while ($true) {
         if ($slugs.Count -gt 0) {
             $save = Read-Host "  Save current queue for next run? [Y/N]"
             if ($save.ToUpper() -eq "Y") {
-                $slugs | ConvertTo-Json | Set-Content $queueFile
+                # Save in full object format
+                $queueItems = $slugs | ForEach-Object {
+                    $s        = $_
+                    $itemMeta = Get-Content "$tempFolder\$s.json" -ErrorAction SilentlyContinue | ConvertFrom-Json
+                    [PSCustomObject]@{
+                        slug       = $s
+                        status     = 'pending'
+                        title      = if ($itemMeta) { $itemMeta.title } else { $s }
+                        artist     = if ($itemMeta) { $itemMeta.artist } else { '' }
+                        album      = if ($itemMeta) { $itemMeta.album } else { '' }
+                        album_art  = if ($itemMeta) { $itemMeta.album_art } else { $null }
+                        source_url = if ($itemMeta) { $itemMeta.source_url } else { '' }
+                        error      = $null
+                    }
+                }
+                Save-Queue $queueItems
                 Write-Host "  Queue saved to $queueFile" -ForegroundColor Green
             }
         }
@@ -301,15 +354,33 @@ while ($true) {
         continue
     }
 
-    # --- Collect the slug from temp ---
+    # --- Collect the slug and save queue in object format ---
     $newJson = Get-ChildItem "$tempFolder\*.json" | Where-Object {
         $j = Get-Content $_.FullName | ConvertFrom-Json
         $j.slug -notin $slugs -and $_.Name -notlike "audio-handoff-*" -and $_.Name -notlike "youtube-handoff-*"
     } | Select-Object -First 1
+
     if ($newJson) {
         $meta = Get-Content $newJson.FullName | ConvertFrom-Json
-        $slugs += $meta.slug
-        $slugs | ConvertTo-Json | Set-Content $queueFile
+        [void]$slugs.Add($meta.slug)
+
+        # Build full object queue and save
+        $queueItems = $slugs | ForEach-Object {
+            $s        = $_
+            $itemMeta = Get-Content "$tempFolder\$s.json" -ErrorAction SilentlyContinue | ConvertFrom-Json
+            [PSCustomObject]@{
+                slug       = $s
+                status     = 'pending'
+                title      = if ($itemMeta) { $itemMeta.title } else { $s }
+                artist     = if ($itemMeta) { $itemMeta.artist } else { '' }
+                album      = if ($itemMeta) { $itemMeta.album } else { '' }
+                album_art  = if ($itemMeta) { $itemMeta.album_art } else { $null }
+                source_url = if ($itemMeta) { $itemMeta.source_url } else { '' }
+                error      = $null
+            }
+        }
+        Save-Queue $queueItems
+
         Write-Host ""
         Write-Host "  Added: $($meta.slug)" -ForegroundColor Green
         Write-Host "  Queue: $($slugs.Count) article(s)" -ForegroundColor DarkGray
@@ -361,15 +432,84 @@ function Run-PythonStep {
     if ($LASTEXITCODE -ne 0) {
         $errMsg = "FAILED: $StepName (exit code $LASTEXITCODE)"
         Write-Host "  $errMsg" -ForegroundColor Red
-        # Always log failures regardless of log level
         if ($logLevel -ne "off") {
             $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
             Add-Content -Path $logFile -Value "[$timestamp]   $errMsg"
-            # On error, also flush the buffered output for this step
             if ($logLevel -eq "on_error") {
                 $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
                 Add-Content -Path $logFile -Value "[$timestamp]   --- Output for failed step ---"
                 $output | ForEach-Object {
+                    Add-Content -Path $logFile -Value "[$timestamp]     $_"
+                }
+            }
+        }
+        return $false
+    }
+    Write-Log "  OK: $StepName"
+    return $true
+}
+
+function Run-PythonStepStreamed {
+    param([string]$StepName, [string[]]$Arguments)
+    Write-Host "  $StepName..." -ForegroundColor Cyan
+    Write-Log "  STEP: $StepName"
+
+    $psi                        = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName               = "python"
+    $psi.Arguments              = $Arguments -join ' '
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError  = $true
+    $psi.UseShellExecute        = $false
+    $psi.CreateNoWindow         = $true
+
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $psi
+    [void]$proc.Start()
+
+    $outputLines = [System.Collections.ArrayList]@()
+
+    while (-not $proc.StandardOutput.EndOfStream) {
+        $line = $proc.StandardOutput.ReadLine()
+        if ($line -ne $null) {
+            # Spinner lines use \r — write them with no newline to update in place
+            if ($line.TrimStart().StartsWith('-') -or
+                $line.TrimStart().StartsWith('\') -or
+                $line.TrimStart().StartsWith('|') -or
+                $line.TrimStart().StartsWith('/')) {
+                Write-Host "`r  $($line.Trim())" -NoNewline
+            } else {
+                # If we were on a spinner line, move to next line first
+                Write-Host ""
+                Write-Host "  $line"
+            }
+            [void]$outputLines.Add($line)
+            Write-Log "    $line"
+        }
+    }
+
+    # Capture any stderr
+    $errOutput = $proc.StandardError.ReadToEnd()
+    $proc.WaitForExit()
+
+    if ($errOutput) {
+        $errOutput.Split("`n") | Where-Object { $_ } | ForEach-Object {
+            Write-Host "  $_"
+            Write-Log "    $_"
+        }
+    }
+
+    Write-Host ""  # ensure we end on a new line
+
+    if ($proc.ExitCode -ne 0) {
+        $errMsg = "FAILED: $StepName (exit code $($proc.ExitCode))"
+        Write-Host "  $errMsg" -ForegroundColor Red
+        if ($logLevel -ne "off") {
+            $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+            Add-Content -Path $logFile -Value "[$timestamp]   $errMsg"
+            if ($logLevel -eq "on_error") {
+                $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                Add-Content -Path $logFile -Value "[$timestamp]   --- Output for failed step ---"
+                $outputLines | ForEach-Object {
                     Add-Content -Path $logFile -Value "[$timestamp]     $_"
                 }
             }
@@ -390,7 +530,16 @@ if ($logLevel -ne "off") {
     Add-Content -Path $logFile -Value "================================================"
 }
 
-# --- Wait for ComfyUI now if it isn't ready yet ---
+# --- Start ComfyUI now that Generate has been chosen ---
+Write-Host ""
+Write-Host "--- Initializing ComfyUI ---" -ForegroundColor Cyan
+if (Test-ComfyUI) {
+    Write-Host "  ERROR: ComfyUI is already running." -ForegroundColor Red
+    Write-Host "  Please close the existing ComfyUI instance and try again." -ForegroundColor Red
+    Read-Host "  Press Enter to exit"
+    Stop-Process -Id $PID -Force
+}
+Start-ComfyUI
 Wait-ComfyUI
 
 $successCount = 0
@@ -435,9 +584,9 @@ foreach ($slug in $slugs) {
                 Add-Content -Path $logFile -Value "[$timestamp]   FAILED: $msg"
             }
             $stepFailed = $true
-        } else {
+    } else {
             Copy-Item $slugTxt $articleTxt -Force
-            $result = Run-PythonStep "Generating audio via ComfyUI" @("$scriptsDir\generate-audio.py", $slug)
+            $result = Run-PythonStepStreamed "Generating audio via ComfyUI" @("$scriptsDir\generate-audio.py", $slug)
             if (-not $result) { $stepFailed = $true }
         }
     }
@@ -461,12 +610,44 @@ foreach ($slug in $slugs) {
         Write-Log "  RESULT: SUCCESS"
     }
 
-    # Rewrite queue file with remaining unprocessed + failed slugs
+    # --- Update queue file after each item ---
     $processedIndex = $slugs.IndexOf($slug)
-    $unprocessed    = [System.Collections.ArrayList]@($slugs | Select-Object -Skip ($processedIndex + 1))
-    $failedSlugs | ForEach-Object { [void]$unprocessed.Add($_) }
-    if ($unprocessed.Count -gt 0) {
-        $unprocessed | ConvertTo-Json | Set-Content $queueFile
+    $remaining      = [System.Collections.ArrayList]@()
+
+    # Add unprocessed slugs ahead in the list
+    $slugs | Select-Object -Skip ($processedIndex + 1) | ForEach-Object {
+        $s        = $_
+        $itemMeta = Get-Content "$tempFolder\$s.json" -ErrorAction SilentlyContinue | ConvertFrom-Json
+        [void]$remaining.Add([PSCustomObject]@{
+            slug       = $s
+            status     = 'pending'
+            title      = if ($itemMeta) { $itemMeta.title } else { $s }
+            artist     = if ($itemMeta) { $itemMeta.artist } else { '' }
+            album      = if ($itemMeta) { $itemMeta.album } else { '' }
+            album_art  = if ($itemMeta) { $itemMeta.album_art } else { $null }
+            source_url = if ($itemMeta) { $itemMeta.source_url } else { '' }
+            error      = $null
+        })
+    }
+
+    # Add failed slugs
+    $failedSlugs | ForEach-Object {
+        $s        = $_
+        $itemMeta = Get-Content "$tempFolder\$s.json" -ErrorAction SilentlyContinue | ConvertFrom-Json
+        [void]$remaining.Add([PSCustomObject]@{
+            slug       = $s
+            status     = 'failed'
+            title      = if ($itemMeta) { $itemMeta.title } else { $s }
+            artist     = if ($itemMeta) { $itemMeta.artist } else { '' }
+            album      = if ($itemMeta) { $itemMeta.album } else { '' }
+            album_art  = if ($itemMeta) { $itemMeta.album_art } else { $null }
+            source_url = if ($itemMeta) { $itemMeta.source_url } else { '' }
+            error      = 'See generation.log for details.'
+        })
+    }
+
+    if ($remaining.Count -gt 0) {
+        Save-Queue $remaining
     } else {
         if (Test-Path $queueFile) { Remove-Item $queueFile -Force }
     }

@@ -11,6 +11,7 @@ from utils import safe_slug, clean_author, get_title, get_author, load_config, g
 
 INPUT_FOLDER  = get_input_folder()
 TEMP_FOLDER   = get_temp_folder()
+WEB_MODE = False  # set to True when --web flag is passed
 
 BLOCK_INDICATORS = [
     'access to this page has been denied',
@@ -129,6 +130,10 @@ def extract_reader_mode_meta(raw):
     return site, title, author
 
 def fetch_from_clipboard(url, forced=False):
+    if '--web' in sys.argv:
+        print('BLOCKED')
+        sys.exit(2)
+    # ... rest of function unchanged
     print()
     print('  +------------------------------------------------------+')
     if forced:
@@ -174,7 +179,6 @@ def fetch_article(url):
     if not url:
         title, slug, author, text = fetch_from_clipboard(url, forced=True)
     else:
-        # YouTube — skip scraping entirely
         if is_youtube_url(url):
             print(f'  YouTube URL detected, will download audio directly.')
             video_id = get_youtube_video_id(url)
@@ -182,7 +186,6 @@ def fetch_article(url):
             handoff  = {'youtube': True, 'source_url': url, 'slug': slug}
             with open(os.path.join(TEMP_FOLDER, f'youtube-handoff-{slug}.json'), 'w', encoding='utf-8') as f:
                 json.dump(handoff, f)
-            # Minimal sidecar so ps1 slug collection works
             meta = {
                 'title':      slug,
                 'artist':     '',
@@ -195,9 +198,11 @@ def fetch_article(url):
                 json.dump(meta, f, indent=2, ensure_ascii=False)
             print(f'  Slug:     {slug}')
             return slug
+
         elif is_clipboard_domain(url):
             print(f'  Known unsupported site, switching to clipboard mode.')
             title, slug, author, text = fetch_from_clipboard(url, forced=False)
+
         else:
             headers = {'User-Agent': 'Mozilla/5.0'}
             try:
@@ -209,44 +214,44 @@ def fetch_article(url):
             else:
                 full_soup = BeautifulSoup(r.text, 'html.parser')
 
-                # Guard against empty or JS-rendered pages
                 if not r.text or len(r.text.strip()) < 200:
                     print(f'  Page appears empty or JS-rendered, switching to clipboard mode.')
                     title, slug, author, text = fetch_from_clipboard(url, forced=False)
                 else:
                     try:
-                        clean_soup = BeautifulSoup(r.text, 'html.parser')
-                        for selector in [
-                            '[class*="share"]', '[class*="related"]',
-                            '[class*="recommended"]', '[class*="newsletter"]',
-                            '[class*="sidebar"]', '[class*="aside"]',
-                            '[class*="widget"]', '[class*="promo"]',
-                            '[class*="ad-"]', '[class*="-ad"]',
-                            '[id*="sidebar"]', '[id*="related"]',
-                            'aside', 'footer', 'nav',
-                        ]:
-                            for tag in clean_soup.select(selector):
-                                tag.decompose()
-
+                        # Run readability on original HTML first
                         doc  = Document(r.text)
-                        soup = BeautifulSoup(Document(str(clean_soup)).summary(), 'html.parser')
+                        soup = BeautifulSoup(doc.summary(), 'html.parser')
 
-                        blocks = []
-                        seen   = set()
+                        # Now clean captions from the already-extracted content
+                        for tag in soup.find_all(['figcaption', 'figure']):
+                            tag.decompose()
+                        for tag in soup.find_all(class_=lambda c: c and any(
+                            x in c.lower() for x in ['caption', 'credit', 'hide-caption']
+                        )):
+                            tag.decompose()
+
+                        # Extract paragraphs and blockquotes
+                        blocks            = []
+                        seen_fingerprints = set()
+
                         for tag in soup.find_all(['p', 'blockquote']):
                             text_content = tag.get_text(separator=' ', strip=True)
-                            if not text_content:
+                            if not text_content or len(text_content) < 4:
                                 continue
-                            normalized = ' '.join(text_content.lower().split())
-                            if normalized in seen:
+
+                            words       = text_content.lower().split()
+                            fingerprint = ' '.join(words[:8])
+
+                            if fingerprint in seen_fingerprints:
                                 continue
-                            if any(normalized in s or s in normalized
-                                   for s in seen if len(s) > 50):
-                                continue
-                            seen.add(normalized)
+
+                            seen_fingerprints.add(fingerprint)
+
                             if tag.name == 'blockquote':
                                 lines        = text_content.splitlines()
                                 text_content = '\r\n'.join(f'    {line}' for line in lines)
+
                             blocks.append(text_content)
 
                         text = '\r\n'.join(blocks)
@@ -292,15 +297,20 @@ def fetch_article(url):
     return slug
 
 if __name__ == '__main__':
-    if len(sys.argv) >= 2 and sys.argv[1] == '--clipboard':
+    args = sys.argv[1:]
+    WEB_MODE = '--web' in args
+    args = [a for a in args if a != '--web']
+    if '--clipboard' in args:
         url = ''
-    elif len(sys.argv) >= 2:
-        url = sys.argv[1]
+    elif args:
+        url = args[0]
     else:
-        print('Usage: python fetch-article.py <url> OR python fetch-article.py --clipboard')
+        print('Usage: python fetch-article.py <url> [--web]')
         sys.exit(1)
     try:
         fetch_article(url)
+    except SystemExit:
+        raise
     except Exception as e:
         print(f'Error: {e}')
         sys.exit(1)

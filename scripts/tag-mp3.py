@@ -129,6 +129,10 @@ def main(slug):
     tag_mp3(mp3_path, meta, art_path, track_number)
     print(f'  Tags written.')
 
+    # Save a copy to temp for web UI download
+    temp_mp3 = os.path.join(TEMP_FOLDER, f'{slug}.mp3')
+    shutil.copy2(mp3_path, temp_mp3)
+
     dest = move_mp3(mp3_path, slug, meta)
     print(f'  Moved to:   {dest}')
 

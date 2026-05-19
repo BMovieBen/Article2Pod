@@ -6,3 +6,4 @@ mutagen
 pyperclip
 ddgs
 yt-dlp
+flask
