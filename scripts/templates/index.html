@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Article2Pod</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700;800&display=swap');
+
+  :root {
+    --bg:        #0d0f12;
+    --surface:   #161920;
+    --surface2:  #1e2229;
+    --border:    #2a2f3a;
+    --accent:    #4ade80;
+    --accent2:   #22d3ee;
+    --danger:    #f87171;
+    --warn:      #fbbf24;
+    --text:      #e2e8f0;
+    --muted:     #64748b;
+    --radius:    12px;
+    --mono:      'DM Mono', monospace;
+    --sans:      'Syne', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    padding: 0 0 80px;
+  }
+
+  /* Header */
+  header {
+    padding: 24px 20px 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    max-width: 600px;
+    margin: 0 auto;
+  }
+
+  header h1 {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: background 0.3s;
+  }
+  .status-dot.active {
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+    animation: pulse 1.5s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  /* Main container */
+  main {
+    max-width: 600px;
+    margin: 0 auto;
+    padding: 20px;
+  }
+
+  /* Input section */
+  .input-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 20px;
+  }
+
+  /* Toggle */
+  .toggle {
+    display: flex;
+    background: var(--surface2);
+    border-radius: 8px;
+    padding: 3px;
+    margin-bottom: 14px;
+    width: fit-content;
+  }
+
+  .toggle button {
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 6px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.3px;
+  }
+
+  .toggle button.active {
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+  }
+
+  /* URL input row */
+  .url-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+
+  input[type="text"], textarea {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    padding: 10px 14px;
+    outline: none;
+    transition: border-color 0.2s;
+    width: 100%;
+  }
+
+  input[type="text"]:focus, textarea:focus {
+    border-color: var(--accent);
+  }
+
+  input[type="text"]::placeholder, textarea::placeholder {
+    color: var(--muted);
+  }
+
+  textarea {
+    min-height: 120px;
+    resize: vertical;
+    line-height: 1.5;
+  }
+
+  /* Text mode hint */
+  .text-hint {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    background: rgba(34, 211, 238, 0.08);
+    border: 1px solid rgba(34, 211, 238, 0.2);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    font-size: 12px;
+    color: var(--accent2);
+    line-height: 1.5;
+  }
+
+  .text-hint ol {
+    margin: 4px 0 0 16px;
+    color: var(--muted);
+  }
+
+  /* Add button */
+  .btn-add {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--accent);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    height: 40px;
+    width: 40px;
+    transition: all 0.2s;
+    font-size: 20px;
+    font-weight: 300;
+  }
+
+  .btn-add:hover {
+    border-color: var(--accent);
+    background: rgba(74, 222, 128, 0.1);
+  }
+
+  .btn-add:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .btn-add-text {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--accent);
+    cursor: pointer;
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 10px 18px;
+    margin-top: 10px;
+    width: 100%;
+    transition: all 0.2s;
+    letter-spacing: 0.3px;
+  }
+
+  .btn-add-text:hover {
+    border-color: var(--accent);
+    background: rgba(74, 222, 128, 0.08);
+  }
+
+  /* Error banner */
+  .error-banner {
+    background: rgba(248, 113, 113, 0.1);
+    border: 1px solid rgba(248, 113, 113, 0.3);
+    border-radius: 8px;
+    color: var(--danger);
+    font-size: 12px;
+    font-family: var(--mono);
+    padding: 10px 12px;
+    margin-top: 10px;
+    display: none;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  /* Queue section */
+  .queue-header {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+
+  .queue-empty {
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    padding: 32px 0;
+  }
+
+  /* Queue card */
+  .queue-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 10px;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+
+  .queue-card.status-processing {
+    border-color: var(--accent2);
+  }
+
+  .queue-card.status-done {
+    border-color: rgba(74, 222, 128, 0.3);
+  }
+
+  .queue-card.status-failed {
+    border-color: rgba(248, 113, 113, 0.3);
+  }
+
+  .card-main {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .card-art {
+    width: 56px;
+    height: 56px;
+    border-radius: 6px;
+    object-fit: cover;
+    flex-shrink: 0;
+    background: var(--surface2);
+  }
+
+  .card-art-placeholder {
+    width: 56px;
+    height: 56px;
+    border-radius: 6px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-size: 20px;
+  }
+
+  .card-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .card-title {
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 2px;
+  }
+
+  .card-meta {
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .card-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .btn-icon {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 15px;
+    height: 32px;
+    width: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+  }
+
+  .btn-icon:hover {
+    color: var(--text);
+    border-color: var(--text);
+  }
+
+  .btn-icon.danger:hover {
+    color: var(--danger);
+    border-color: var(--danger);
+  }
+
+  .btn-icon.success {
+    color: var(--accent);
+    border-color: rgba(74, 222, 128, 0.3);
+  }
+
+  .btn-icon.success:hover {
+    background: rgba(74, 222, 128, 0.1);
+    border-color: var(--accent);
+  }
+
+  /* Spinner */
+  .spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent2);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* Fetch output collapsible */
+  .card-output {
+    border-top: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    overflow: hidden;
+    max-height: 0;
+    transition: max-height 0.3s ease;
+  }
+
+  .card-output.open {
+    max-height: 300px;
+  }
+
+  .card-output-inner {
+    padding: 10px 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    overflow-y: auto;
+    max-height: 300px;
+  }
+
+  .card-error {
+    border-top: 1px solid rgba(248, 113, 113, 0.2);
+    background: rgba(248, 113, 113, 0.05);
+    padding: 10px 12px;
+    font-size: 12px;
+    font-family: var(--mono);
+    color: var(--danger);
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  .card-fetching {
+    padding: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  /* Toggle output button */
+  .btn-output-toggle {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 11px;
+    font-family: var(--mono);
+    padding: 0;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .btn-output-toggle:hover {
+    color: var(--text);
+  }
+
+  /* Generate / Stop button */
+  .generate-wrap {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(to top, var(--bg) 60%, transparent);
+    padding: 20px;
+    display: flex;
+    justify-content: center;
+  }
+
+  .btn-generate {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border: none;
+    border-radius: 50px;
+    color: #0d0f12;
+    cursor: pointer;
+    font-family: var(--sans);
+    font-size: 15px;
+    font-weight: 800;
+    padding: 14px 48px;
+    letter-spacing: 0.3px;
+    transition: all 0.2s;
+    box-shadow: 0 4px 24px rgba(74, 222, 128, 0.25);
+  }
+
+  .btn-generate:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 32px rgba(74, 222, 128, 0.35);
+  }
+
+  .btn-generate:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+  }
+
+  .btn-generate.stop {
+    background: linear-gradient(135deg, var(--danger), #fb923c);
+    box-shadow: 0 4px 24px rgba(248, 113, 113, 0.25);
+  }
+
+  .btn-generate.stop:hover {
+    box-shadow: 0 6px 32px rgba(248, 113, 113, 0.35);
+  }
+
+  /* Adding spinner overlay on card */
+  .adding-overlay {
+    padding: 16px 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Article2Pod</h1>
+  <div class="status-dot" id="statusDot"></div>
+</header>
+
+<main>
+  <!-- Input Section -->
+  <div class="input-section">
+    <div class="toggle">
+      <button class="active" id="btnUrl" onclick="setMode('url')">URL</button>
+      <button id="btnText" onclick="setMode('text')">Text</button>
+    </div>
+
+    <!-- URL mode -->
+    <div id="urlMode">
+      <div class="url-row">
+        <input type="text" id="urlInput" placeholder="Paste article URL..."
+               onkeydown="if(event.key==='Enter') addUrl()">
+        <button class="btn-add" id="addBtn" onclick="addUrl()" title="Add to Queue">+</button>
+      </div>
+    </div>
+
+    <!-- Text mode -->
+    <div id="textMode" style="display:none">
+      <div class="text-hint">
+        <span>&#9432;</span>
+        <div>
+          Use browser <strong>Reader Mode</strong> to get clean article text:
+          <ol>
+            <li>Open article in Firefox or Edge</li>
+            <li>Enable Reader Mode (F9)</li>
+            <li>Select All (Ctrl+A) and Copy (Ctrl+C)</li>
+            <li>Paste below</li>
+          </ol>
+        </div>
+      </div>
+      <textarea id="textInput" placeholder="Paste plain text article content here..."></textarea>
+      <button class="btn-add-text" onclick="addText()">Add to Queue</button>
+    </div>
+
+    <div class="error-banner" id="errorBanner"></div>
+  </div>
+
+  <!-- Queue -->
+  <div class="queue-header">Queue</div>
+  <div id="queueList">
+    <div class="queue-empty" id="queueEmpty">No articles queued yet.</div>
+  </div>
+</main>
+
+<!-- Generate / Stop -->
+<div class="generate-wrap">
+  <button class="btn-generate" id="generateBtn" onclick="handleGenerate()" disabled>
+    Generate
+  </button>
+</div>
+
+<script>
+  let mode       = 'url';
+  let isProcessing = false;
+  let stopPending  = false;
+  // Track which cards have output panel open
+  const outputOpen = {};
+
+  function setMode(m) {
+    mode = m;
+    document.getElementById('urlMode').style.display   = m === 'url'  ? '' : 'none';
+    document.getElementById('textMode').style.display  = m === 'text' ? '' : 'none';
+    document.getElementById('btnUrl').classList.toggle('active', m === 'url');
+    document.getElementById('btnText').classList.toggle('active', m === 'text');
+    clearError();
+  }
+
+  function showError(msg) {
+    const el = document.getElementById('errorBanner');
+    el.textContent = msg;
+    el.style.display = 'block';
+  }
+
+  function clearError() {
+    document.getElementById('errorBanner').style.display = 'none';
+  }
+
+  async function addUrl() {
+    const url = document.getElementById('urlInput').value.trim();
+    if (!url) return;
+    clearError();
+    setAdding(true);
+
+    const res  = await fetch('/api/add', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url, mode: 'url'}),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      // Remove placeholder on failure
+      const ph = document.getElementById('adding-placeholder');
+      if (ph) ph.remove();
+      setAdding(false);
+      showError(data.error || 'Failed to add article.');
+      if (data.switch_to_text) {
+        setMode('text');
+        document.getElementById('textInput').placeholder =
+          'Site is blocked. Paste Reader Mode content here...';
+      }
+      return;
+    }
+
+    document.getElementById('urlInput').value = '';
+    document.getElementById('addBtn').disabled = false;
+    // Placeholder stays until poll replaces it with real card
+    updateGenerateBtn();
+  }
+
+  async function addText() {
+    const text = document.getElementById('textInput').value.trim();
+    if (!text) return;
+    clearError();
+    setAdding(true);
+
+    const res  = await fetch('/api/add', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text, mode: 'text'}),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      const ph = document.getElementById('adding-placeholder');
+      if (ph) ph.remove();
+      setAdding(false);
+      showError(data.error || 'Failed to add article.');
+      return;
+    }
+
+    document.getElementById('textInput').value = '';
+    document.getElementById('addBtn').disabled = false;
+    updateGenerateBtn();
+  }
+
+  function setAdding(adding) {
+    document.getElementById('addBtn').disabled = adding;
+    const list  = document.getElementById('queueList');
+    const empty = document.getElementById('queueEmpty');
+    if (adding) {
+      const existing = document.getElementById('adding-placeholder');
+      if (!existing) {
+        const div = document.createElement('div');
+        div.className = 'queue-card';
+        div.id = 'adding-placeholder';
+        div.innerHTML = `<div class="adding-overlay"><div class="spinner"></div>Fetching article...</div>`;
+        list.insertBefore(div, list.firstChild);
+      }
+      empty.style.display = 'none';
+    }
+    // NOTE: do NOT remove placeholder here — poll will replace it
+  }
+
+  function renderSingleCard(data) {
+    // Called immediately after a successful add — inserts card with known data
+    // Full queue poll will keep it updated
+    pollQueue(); // just trigger a full refresh
+  }
+
+  function handleGenerate() {
+    if (isProcessing) {
+      stopQueue();
+    } else {
+      startGenerate();
+    }
+  }
+
+  async function startGenerate() {
+    const res  = await fetch('/api/generate', {method: 'POST'});
+    const data = await res.json();
+    if (!res.ok) {
+      showError(data.error || 'Could not start generation.');
+    }
+  }
+
+  async function stopQueue() {
+    stopPending = true;
+    document.getElementById('generateBtn').textContent = 'Stopping...';
+    await fetch('/api/stop', {method: 'POST'});
+  }
+
+  async function removeItem(slug) {
+    const res = await fetch('/api/remove', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({slug}),
+    });
+    if (res.ok) {
+      pollQueue();
+    } else {
+      const d = await res.json();
+      showError(d.error || 'Could not remove item.');
+    }
+  }
+
+  async function openItem(slug) {
+    const res  = await fetch('/api/open', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({slug}),
+    });
+    if (!res.ok) {
+      const d = await res.json();
+      showError(d.error || 'Could not open file.');
+    }
+  }
+
+  function toggleOutput(slug) {
+    outputOpen[slug] = !outputOpen[slug];
+    const el = document.getElementById(`output-${slug}`);
+    if (el) el.classList.toggle('open', outputOpen[slug]);
+    const btn = document.getElementById(`output-btn-${slug}`);
+    if (btn) btn.textContent = outputOpen[slug] ? 'hide output' : 'show output';
+  }
+
+  function updateGenerateBtn() {
+    // Updated by poll
+  }
+
+  // ---- Polling ----
+  async function pollQueue() {
+    const res  = await fetch('/api/queue');
+    const data = await res.json();
+
+    isProcessing = data.processing;
+    renderQueue(data.queue, data.processing);
+
+    const dot = document.getElementById('statusDot');
+    dot.classList.toggle('active', data.processing);
+
+    const btn = document.getElementById('generateBtn');
+    if (data.processing) {
+      btn.textContent = stopPending ? 'Stopping...' : 'Stop';
+      btn.classList.add('stop');
+      btn.disabled = false;
+    } else {
+      stopPending = false;
+      btn.classList.remove('stop');
+      btn.textContent = 'Generate';
+      const hasPending = data.queue.some(i => i.status === 'pending' || i.status === 'failed');
+      btn.disabled = !hasPending;
+    }
+  }
+
+  function renderQueue(queue, processing) {
+    const list  = document.getElementById('queueList');
+    const empty = document.getElementById('queueEmpty');
+
+    if (queue.length === 0) {
+      // Only show empty if no placeholder is active
+      const ph = document.getElementById('adding-placeholder');
+      if (!ph) {
+        list.innerHTML = '';
+        list.appendChild(empty);
+        empty.style.display = '';
+      }
+      return;
+    }
+
+    empty.style.display = 'none';
+    const slugSet = new Set(queue.map(i => i.slug));
+
+    // Remove placeholder if the item is now in the queue
+    const ph = document.getElementById('adding-placeholder');
+    if (ph && queue.length > 0) ph.remove();
+
+    // Remove cards no longer in queue
+    list.querySelectorAll('.queue-card[data-slug]').forEach(card => {
+      if (!slugSet.has(card.dataset.slug)) card.remove();
+    });
+
+    queue.forEach((item) => {
+      let card = list.querySelector(`.queue-card[data-slug="${item.slug}"]`);
+
+      if (!card) {
+        card = document.createElement('div');
+        card.dataset.slug = item.slug;
+        list.appendChild(card);
+      }
+
+      card.className = `queue-card status-${item.status}`;
+
+      const artHtml = item.album_art_b64
+        ? `<img class="card-art" src="${item.album_art_b64}" alt="">`
+        : `<div class="card-art-placeholder">&#9834;</div>`;
+
+      // Status/action icon — single button only
+      let actionHtml = '';
+      if (item.status === 'processing') {
+        actionHtml = `<div class="spinner"></div>`;
+      } else if (item.status === 'done') {
+        // Download link styled as play button
+        actionHtml = `<a class="btn-icon success"
+          href="/api/download/${item.slug}"
+          download
+          title="Download MP3">&#9654;</a>`;
+      } else if (item.status === 'failed') {
+        actionHtml = `<span style="color:var(--danger);font-size:18px;" title="${escHtml(item.error || '')}">&#10005;</span>`;
+      } else if (item.status === 'pending') {
+        // Only pending items get the remove button
+        actionHtml = `<button class="btn-icon danger"
+          onclick="removeItem('${item.slug}')"
+          title="Remove"
+          style="font-size:22px;font-weight:700;line-height:1;padding-bottom:2px;">-</button>`;
+      }
+
+      const hasOutput = item.fetch_output || item.error;
+      const outputToggle = hasOutput
+        ? `<button class="btn-output-toggle" id="output-btn-${item.slug}"
+             onclick="toggleOutput('${item.slug}')">
+             ${outputOpen[item.slug] ? 'hide output' : 'show output'}
+           </button>`
+        : '';
+
+      const outputContent = item.fetch_output || '';
+      const errorContent  = item.error || '';
+
+      card.innerHTML = `
+        <div class="card-main">
+          ${artHtml}
+          <div class="card-info">
+            <div class="card-title">${escHtml(item.title || item.slug)}</div>
+            <div class="card-meta">
+              ${escHtml(item.album || '')}${item.album && item.artist ? ' &middot; ' : ''}${escHtml(item.artist || '')}
+            </div>
+            ${outputToggle ? `<div style="margin-top:4px">${outputToggle}</div>` : ''}
+          </div>
+          <div class="card-actions">
+            ${actionHtml}
+          </div>
+        </div>
+        ${errorContent ? `<div class="card-error">${escHtml(errorContent)}</div>` : ''}
+        ${outputContent ? `
+          <div class="card-output ${outputOpen[item.slug] ? 'open' : ''}" id="output-${item.slug}">
+            <div class="card-output-inner">${escHtml(outputContent)}</div>
+          </div>` : ''}
+      `;
+    });
+  }
+
+  function escHtml(str) {
+    if (!str) return '';
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+              .replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+  }
+
+  // Poll every 1 second
+  setInterval(pollQueue, 1000);
+  pollQueue();
+</script>
+</body>
+</html>
