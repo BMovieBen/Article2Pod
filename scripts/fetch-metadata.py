@@ -3,6 +3,7 @@
 
 import os, sys, re, json
 import requests
+from PIL import ImageDraw
 from readability import Document
 from bs4 import BeautifulSoup
 from PIL import Image
@@ -18,11 +19,21 @@ os.makedirs(INPUT_FOLDER, exist_ok=True)
 os.makedirs(TEMP_FOLDER, exist_ok=True)
 
 from utils import safe_slug, get_title, get_author, get_site_name, get_temp_folder, get_input_folder, get_user_agent
-HEADERS = {'User-Agent': get_user_agent()}
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9'
+}
 
 def fetch_and_resize_image(img_url, size=(500, 500)):
     try:
         r = requests.get(img_url, headers=HEADERS, timeout=10)
+        
+        # Explicitly check for HTTP errors before passing to Pillow
+        if r.status_code != 200:
+            print(f"  [Debug] HTTP {r.status_code}: Server blocked or image not found for {img_url}")
+            return None
+            
         img = Image.open(BytesIO(r.content)).convert('RGB')
 
         target_w, target_h = size
@@ -38,18 +49,51 @@ def fetch_and_resize_image(img_url, size=(500, 500)):
         img  = img.crop((left, top, left + target_w, top + target_h))
 
         return img
-    except Exception:
+    except Exception as e:
+        print(f"  [Debug] Fetch error: {e}")
         return None
+
+def create_local_fallback_image(title, size=(500, 500)):
+    """Generates a simple, purely local colored square to prevent pipeline crashes."""
+    import random
+    
+    # A palette of vibrant podcast-style background colors (RGB format)
+    colors = [(26, 188, 156), (52, 152, 219), (155, 89, 182), (230, 126, 34), (231, 76, 60), (52, 73, 94)]
+    bg_color = random.choice(colors)
+    
+    # Generate the solid color image
+    img = Image.new('RGB', size, color=bg_color)
+    draw = ImageDraw.Draw(img)
+    
+    # Grab the first letter of the title for the center
+    initial = title[0].upper() if title and len(title) > 0 else "A"
+    
+    # We use the default font so it doesn't crash searching for .ttf files on your hard drive.
+    # It will be small, but it guarantees you have a valid image for your audio encoder!
+    draw.text((245, 245), initial, fill=(255, 255, 255))
+    
+    return img
 
 def search_image(query):
     import time
-    # Try with progressively shorter queries if no results
+    
+    # 1. Filter out common stop words that confuse image search algorithms
+    stop_words = {'a', 'an', 'and', 'the', 'is', 'not', 'in', 'of', 'to', 'for', 'on', 'with', 'by', 'at', 'from', 'as', 'it'}
+    important_words = [w for w in query.split() if w.lower() not in stop_words]
+    
+    # 2. Build a progressive list of queries to try
     queries = [
-        query,
-        ' '.join(query.split()[:6]),  # first 6 words
-        ' '.join(query.split()[:4]),  # first 4 words
+        query,                                             # Attempt 1: Full title
+        ' '.join(query.split()[:5]),                       # Attempt 2: Exactly the first 5 words
+        ' '.join(important_words[:4]),                     # Attempt 3: First 4 "important" words
+        important_words[0] if important_words else query   # Attempt 4: Hail Mary - Just the main subject (e.g., "Cuba")
     ]
+    
+    # Remove any duplicates in case the fallbacks generate the exact same string
+    queries = list(dict.fromkeys(queries))
+
     for q in queries:
+        print(f"  [Debug] Searching DDG for: '{q}'")
         try:
             with DDGS() as ddgs:
                 results = list(ddgs.images(q, max_results=5))
@@ -58,13 +102,15 @@ def search_image(query):
                     img = fetch_and_resize_image(result['image'])
                     if img:
                         return img
-        except Exception:
-            pass
-        time.sleep(1)  # brief pause between attempts
+        except Exception as e:
+             print(f"  [Debug] DDG Search error: {e}")
+             
+        time.sleep(1)  # brief pause between attempts to avoid rate limiting
+        
     return None
 
 def get_article_image(url, soup, title=''):
-    """Try OG image first, fall back to image search using article title."""
+    """Try OG image first, fall back to search, then favicon, then generated text image."""
 
     # 1. Open Graph image — best quality, article-specific
     og = soup.find('meta', property='og:image')
@@ -73,19 +119,29 @@ def get_article_image(url, soup, title=''):
         if img:
             return img
 
-    # 2. Image search using article title
+    # 2. Image search using sanitized article title
     if title:
-        print(f'  Art: searching for "{title[:50]}"')
-        img = search_image(title)
+        clean_title = title.split(' | ')[0].split(' - ')[0].split(' — ')[0].strip()
+        print(f'  Art: searching for "{clean_title[:50]}"')
+        img = search_image(clean_title)
         if img:
             print(f'  Art: found via image search')
             return img
 
-    # 3. Clearbit logo as last resort
-    domain = urlparse(url).netloc.replace('www.', '')
-    img = fetch_and_resize_image(f'https://logo.clearbit.com/{domain}')
+    # 3. Google Favicon (Skips automatically in Clipboard mode)
+    domain = urlparse(url).netloc.replace('www.', '') if url else ""
+    if domain:
+        img = fetch_and_resize_image(f'https://www.google.com/s2/favicons?sz=128&domain={domain}')
+        if img:
+            print(f'  Art: using Google Favicon for {domain}')
+            return img
+
+    # 4. Ultimate Fallback: Local Generated Image (Zero Internet Required)
+    print('  Art: All network methods failed. Generating local fallback image.')
+    
+    img = create_local_fallback_image(title)
     if img:
-        print(f'  Art: using Clearbit logo for {domain}')
+        print('  Art: Local fallback generated successfully.')
         return img
 
     return None
@@ -210,6 +266,30 @@ def fetch_metadata(url):
     return slug
 
 if __name__ == '__main__':
+    # --- ISOLATED TESTING BLOCKS ---
+    if len(sys.argv) >= 3 and sys.argv[1] == '--test-search':
+        query = sys.argv[2]
+        print(f"Testing search for: '{query}'")
+        img = search_image(query)
+        if img:
+            print("Success! Image found.")
+            img.show()
+        else:
+            print("Failure: No image returned.")
+        sys.exit(0)
+        
+    elif len(sys.argv) >= 3 and sys.argv[1] == '--test-fetch':
+        img_url = sys.argv[2]
+        print(f"Testing direct fetch for: '{img_url}'")
+        img = fetch_and_resize_image(img_url)
+        if img:
+            print("Success! Image downloaded and resized.")
+            img.show()
+        else:
+            print("Failure: Image function returned None.")
+        sys.exit(0)
+    # ----------------------------------
+
     if len(sys.argv) >= 2 and sys.argv[1] == '--clipboard':
         url = ''
     elif len(sys.argv) >= 2:
@@ -217,6 +297,7 @@ if __name__ == '__main__':
     else:
         print('Usage: python fetch-metadata.py <url>')
         sys.exit(1)
+        
     try:
         fetch_metadata(url if url != '--clipboard' else '')
     except Exception as e:
