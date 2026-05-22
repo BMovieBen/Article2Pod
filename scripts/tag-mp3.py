@@ -1,29 +1,17 @@
 # tag-mp3.py
-# Tags the single MP3 in C:\ComfyUI\output\audio with ID3 metadata,
-# renames it to the slug, moves it to D:\Podcasts\[Album]\[Artist]\,
-# then archives the txt file to C:\ComfyUI\temp\
 
 import os, sys, json, shutil, glob
 from mutagen.id3 import ID3, TIT2, TPE1, TPE2, TALB, APIC, TRCK, ID3NoHeaderError
+from utils import (
+    get_input_folder, get_audio_folder, get_temp_folder,
+    get_podcasts_folder, get_track_log, sanitize_filename
+)
 
-from utils import get_input_folder, get_audio_folder, get_temp_folder, get_podcasts_folder, get_track_log
-
-AUDIO_FOLDER  = get_audio_folder()
-TEMP_FOLDER   = get_temp_folder()
-INPUT_FOLDER  = get_input_folder()
+AUDIO_FOLDER    = get_audio_folder()
+TEMP_FOLDER     = get_temp_folder()
+INPUT_FOLDER    = get_input_folder()
 PODCASTS_FOLDER = get_podcasts_folder()
 TRACK_LOG       = get_track_log()
-
-def sanitize(name):
-    return ''.join(c for c in name.strip() if c not in r'\/:*?"<>|')
-
-def find_mp3():
-    matches = glob.glob(os.path.join(AUDIO_FOLDER, '*.mp3'))
-    return matches[0] if matches else None
-
-def find_json():
-    matches = glob.glob(os.path.join(TEMP_FOLDER, '*.json'))
-    return matches[0] if matches else None
 
 def load_track_log():
     if os.path.isfile(TRACK_LOG):
@@ -40,8 +28,7 @@ def get_next_track(meta):
     author = meta.get('artist', 'Unknown Author')
     log    = load_track_log()
     key    = f'{site}|{author}'
-    last   = log.get(key, 0)
-    next_track = last + 1
+    next_track = log.get(key, 0) + 1
     log[key]   = next_track
     save_track_log(log)
     return next_track
@@ -51,26 +38,17 @@ def tag_mp3(mp3_path, meta, art_path, track_number):
         tags = ID3(mp3_path)
     except ID3NoHeaderError:
         tags = ID3()
-
-    site   = meta.get('album',  '')   # website stored as album in JSON
-    author = meta.get('artist', '')   # author stored as artist in JSON
-
+    site   = meta.get('album',  '')
+    author = meta.get('artist', '')
     tags.add(TIT2(encoding=3, text=meta.get('title', '')))
-    tags.add(TPE1(encoding=3, text=site))    # Artist = website
-    tags.add(TPE2(encoding=3, text=site))    # Album Artist = website
-    tags.add(TALB(encoding=3, text=author))  # Album = author
+    tags.add(TPE1(encoding=3, text=site))
+    tags.add(TPE2(encoding=3, text=site))
+    tags.add(TALB(encoding=3, text=author))
     tags.add(TRCK(encoding=3, text=str(track_number)))
-
     if art_path and os.path.isfile(art_path):
         with open(art_path, 'rb') as f:
-            tags.add(APIC(
-                encoding=3,
-                mime='image/jpeg',
-                type=3,
-                desc='Cover',
-                data=f.read()
-            ))
-
+            tags.add(APIC(encoding=3, mime='image/jpeg', type=3,
+                          desc='Cover', data=f.read()))
     tags.save(mp3_path)
 
 def move_mp3(mp3_path, slug, meta):
@@ -78,37 +56,26 @@ def move_mp3(mp3_path, slug, meta):
     author = meta.get('artist', 'Unknown Author')
     title  = meta.get('title',  'Untitled')
 
-    # Sanitize title for filename
-    safe_title = ''.join(c for c in title if c not in r'\/:*?"<>|').strip()
+    site_part  = sanitize_filename(site)
+    safe_title = sanitize_filename(title)
+    max_title  = max(10, 150 - len(site_part) - len(' - .mp3'))
+    filename   = f'{site_part} - {safe_title[:max_title].rstrip()}.mp3'
 
-    # Keep filename under 150 chars to leave room for folder path depth
-    site_part = sanitize(site)
-    max_title = 150 - len(site_part) - len(' - .mp3')
-    if max_title < 10:
-        max_title = 10
-    safe_title = safe_title[:max_title].rstrip()
-
-    filename    = f'{site_part} - {safe_title}.mp3'
-    dest_folder = os.path.join(PODCASTS_FOLDER, sanitize(site), sanitize(author))
+    dest_folder = os.path.join(PODCASTS_FOLDER,
+                               sanitize_filename(site),
+                               sanitize_filename(author))
     os.makedirs(dest_folder, exist_ok=True)
-    dest_path   = os.path.join(dest_folder, filename)
+    dest_path = os.path.join(dest_folder, filename)
     shutil.move(mp3_path, dest_path)
     return dest_path
 
-def archive_txt(slug):
-    txt_path = os.path.join(INPUT_FOLDER, f'{slug}.txt')
-    if os.path.isfile(txt_path):
-        shutil.move(txt_path, os.path.join(TEMP_FOLDER, f'{slug}.txt'))
-        return txt_path
-    return None
-
 def main(slug):
     json_path = os.path.join(TEMP_FOLDER, f'{slug}.json')
+    mp3_path  = os.path.join(AUDIO_FOLDER, f'{slug}.mp3')
+
     if not os.path.isfile(json_path):
         print(f'  No metadata JSON found for slug: {slug}')
         sys.exit(1)
-
-    mp3_path = os.path.join(AUDIO_FOLDER, f'{slug}.mp3')
     if not os.path.isfile(mp3_path):
         print(f'  No MP3 found for slug: {slug}')
         sys.exit(1)
@@ -121,17 +88,16 @@ def main(slug):
 
     print(f'  File:       {slug}.mp3')
     print(f'  Title:      {meta.get("title")}')
-    print(f'  Artist:     {meta.get("album")}')   # site = artist
-    print(f'  Album:      {meta.get("artist")}')  # author = album
+    print(f'  Artist:     {meta.get("album")}')
+    print(f'  Album:      {meta.get("artist")}')
     print(f'  Art:        {art_path if os.path.isfile(art_path) else "none"}')
     print(f'  Track:      {track_number}')
 
     tag_mp3(mp3_path, meta, art_path, track_number)
     print(f'  Tags written.')
 
-    # Save a copy to temp for web UI download
-    temp_mp3 = os.path.join(TEMP_FOLDER, f'{slug}.mp3')
-    shutil.copy2(mp3_path, temp_mp3)
+    # Copy to temp for web UI download before moving
+    shutil.copy2(mp3_path, os.path.join(TEMP_FOLDER, f'{slug}.mp3'))
 
     dest = move_mp3(mp3_path, slug, meta)
     print(f'  Moved to:   {dest}')

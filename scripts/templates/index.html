@@ -599,10 +599,10 @@
     const data = await res.json();
 
     if (!res.ok) {
-      // Remove placeholder on failure
+      // On failure, remove placeholder and re-enable button
       const ph = document.getElementById('adding-placeholder');
       if (ph) ph.remove();
-      setAdding(false);
+      document.getElementById('addBtn').disabled = false;
       showError(data.error || 'Failed to add article.');
       if (data.switch_to_text) {
         setMode('text');
@@ -614,8 +614,7 @@
 
     document.getElementById('urlInput').value = '';
     document.getElementById('addBtn').disabled = false;
-    // Placeholder stays until poll replaces it with real card
-    updateGenerateBtn();
+    // Placeholder stays — next poll will replace it with the real card
   }
 
   async function addText() {
@@ -634,14 +633,14 @@
     if (!res.ok) {
       const ph = document.getElementById('adding-placeholder');
       if (ph) ph.remove();
-      setAdding(false);
+      document.getElementById('addBtn').disabled = false;
       showError(data.error || 'Failed to add article.');
       return;
     }
 
     document.getElementById('textInput').value = '';
     document.getElementById('addBtn').disabled = false;
-    updateGenerateBtn();
+    // Placeholder stays — next poll will replace it with the real card
   }
 
   function setAdding(adding) {
@@ -655,11 +654,12 @@
         div.className = 'queue-card';
         div.id = 'adding-placeholder';
         div.innerHTML = `<div class="adding-overlay"><div class="spinner"></div>Fetching article...</div>`;
+        // Insert at TOP of list
         list.insertBefore(div, list.firstChild);
       }
       empty.style.display = 'none';
     }
-    // NOTE: do NOT remove placeholder here — poll will replace it
+    // Never remove placeholder here — renderQueue handles replacement
   }
 
   function renderSingleCard(data) {
@@ -756,10 +756,9 @@
   function renderQueue(queue, processing) {
     const list  = document.getElementById('queueList');
     const empty = document.getElementById('queueEmpty');
+    const ph    = document.getElementById('adding-placeholder');
 
     if (queue.length === 0) {
-      // Only show empty if no placeholder is active
-      const ph = document.getElementById('adding-placeholder');
       if (!ph) {
         list.innerHTML = '';
         list.appendChild(empty);
@@ -769,24 +768,30 @@
     }
 
     empty.style.display = 'none';
+
     const slugSet = new Set(queue.map(i => i.slug));
 
-    // Remove placeholder if the item is now in the queue
-    const ph = document.getElementById('adding-placeholder');
-    if (ph && queue.length > 0) ph.remove();
-
-    // Remove cards no longer in queue
+    // Remove cards no longer in queue (but not the placeholder)
     list.querySelectorAll('.queue-card[data-slug]').forEach(card => {
       if (!slugSet.has(card.dataset.slug)) card.remove();
     });
 
-    queue.forEach((item) => {
-      let card = list.querySelector(`.queue-card[data-slug="${item.slug}"]`);
+    // Render newest-first (reverse the array for display only)
+    const displayQueue = [...queue].reverse();
 
-      if (!card) {
+    displayQueue.forEach((item, idx) => {
+      let card = list.querySelector(`.queue-card[data-slug="${item.slug}"]`);
+      const isNew = !card;
+
+      if (isNew) {
         card = document.createElement('div');
         card.dataset.slug = item.slug;
-        list.appendChild(card);
+        // Replace placeholder if present, otherwise insert at top
+        if (ph) {
+          list.replaceChild(card, ph);
+        } else {
+          list.insertBefore(card, list.firstChild);
+        }
       }
 
       card.className = `queue-card status-${item.status}`;
@@ -795,34 +800,31 @@
         ? `<img class="card-art" src="${item.album_art_b64}" alt="">`
         : `<div class="card-art-placeholder">&#9834;</div>`;
 
-      // Status/action icon — single button only
       let actionHtml = '';
       if (item.status === 'processing') {
         actionHtml = `<div class="spinner"></div>`;
       } else if (item.status === 'done') {
-        // Download link styled as play button
         actionHtml = `<a class="btn-icon success"
           href="/api/download/${item.slug}"
           download
           title="Download MP3">&#9654;</a>`;
       } else if (item.status === 'failed') {
-        actionHtml = `<span style="color:var(--danger);font-size:18px;" title="${escHtml(item.error || '')}">&#10005;</span>`;
+        actionHtml = `<span style="color:var(--danger);font-size:18px;"
+          title="${escHtml(item.error || '')}">&#10005;</span>`;
       } else if (item.status === 'pending') {
-        // Only pending items get the remove button
         actionHtml = `<button class="btn-icon danger"
           onclick="removeItem('${item.slug}')"
           title="Remove"
           style="font-size:22px;font-weight:700;line-height:1;padding-bottom:2px;">-</button>`;
       }
 
-      const hasOutput = item.fetch_output || item.error;
-      const outputToggle = hasOutput
+      const hasOutput     = item.fetch_output || item.error;
+      const outputToggle  = hasOutput
         ? `<button class="btn-output-toggle" id="output-btn-${item.slug}"
              onclick="toggleOutput('${item.slug}')">
              ${outputOpen[item.slug] ? 'hide output' : 'show output'}
            </button>`
         : '';
-
       const outputContent = item.fetch_output || '';
       const errorContent  = item.error || '';
 
@@ -836,9 +838,7 @@
             </div>
             ${outputToggle ? `<div style="margin-top:4px">${outputToggle}</div>` : ''}
           </div>
-          <div class="card-actions">
-            ${actionHtml}
-          </div>
+          <div class="card-actions">${actionHtml}</div>
         </div>
         ${errorContent ? `<div class="card-error">${escHtml(errorContent)}</div>` : ''}
         ${outputContent ? `
