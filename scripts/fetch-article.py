@@ -18,6 +18,7 @@ TEMP_FOLDER  = get_temp_folder()
 BLOCK_INDICATORS = [
     'access to this page has been denied',
     'access denied',
+    'you have been blocked',
     'please enable cookies',
     'checking your browser',
     'cloudflare',
@@ -25,11 +26,20 @@ BLOCK_INDICATORS = [
     'enable javascript',
     'robot or human',
     'unusual traffic',
+    'verifying you are human',
+    'verify you are human',
+    'enable cookies',
+    'browser check',
 ]
 
 def is_blocked(title, text):
-    combined = (title + ' ' + text).lower()
-    return any(phrase in combined for phrase in BLOCK_INDICATORS) and len(text) < 500
+    title_lower    = title.lower()
+    combined_lower = (title + ' ' + text).lower()
+    # Check title alone first — block pages often have very little body text
+    if any(phrase in title_lower for phrase in BLOCK_INDICATORS):
+        return True
+    return any(phrase in combined_lower for phrase in BLOCK_INDICATORS) \
+           and len(text) < 500
 
 def fetch_article(url):
     os.makedirs(TEMP_FOLDER, exist_ok=True)

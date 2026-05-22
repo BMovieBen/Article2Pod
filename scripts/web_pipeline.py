@@ -1,7 +1,7 @@
 # web_pipeline.py
 # Article add and text paste processing for web UI
 
-import os, json, re, base64
+import os, json, re, base64, time
 import subprocess
 from utils import (
     safe_slug, clean_author, get_temp_folder, get_input_folder,
@@ -105,6 +105,7 @@ def finish_add(slug, url, mode, fetch_output):
         'album_art':  meta.get('album_art'),
         'source_url': url,
         'error':      None,
+        'added_at':   time.time(),   # unix timestamp
     }
 
     with queue_lock:

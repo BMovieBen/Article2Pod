@@ -49,7 +49,8 @@ def index():
 @app.route('/api/queue', methods=['GET'])
 def api_queue():
     queue  = load_queue()
-    state  = get_state()
+    # Sort newest-first for display — processing still happens oldest-first
+    queue  = sorted(queue, key=lambda i: i.get('added_at', 0), reverse=True)
     result = []
     for item in queue:
         entry = dict(item)
