@@ -145,24 +145,47 @@ def process_queue():
                 save_queue(q)
             processing = False
             return
+
+        # Mark first pending item as processing immediately so UI shows spinner
+        with queue_lock:
+            q       = load_queue()
+            pending = [i for i in q if i['status'] == 'pending']
+            if pending:
+                pending[0]['status'] = 'processing'
+                current_slug         = pending[0]['slug']
+                save_queue(q)
+
         print('[Article2Pod] Starting ComfyUI...')
         if not start_comfyui():
             with queue_lock:
                 q = load_queue()
                 for item in q:
-                    if item['status'] == 'pending':
+                    if item['status'] in ('pending', 'processing'):
                         item['status'] = 'failed'
                         item['error']  = 'ComfyUI failed to start.'
                 save_queue(q)
-            processing = False
+            processing   = False
+            current_slug = None
             return
+
         print('[Article2Pod] ComfyUI ready.')
         comfyui_started = True
+
+        # Reset the item we pre-marked back to pending so the loop picks it up normally
+        with queue_lock:
+            q = load_queue()
+            for item in q:
+                if item['slug'] == current_slug and item['status'] == 'processing':
+                    item['status'] = 'pending'
+            save_queue(q)
+        current_slug = None
 
     try:
         while True:
             if stop_requested:
+                print('[Article2Pod] Stop requested — halting queue.')
                 break
+
             with queue_lock:
                 q       = load_queue()
                 pending = [i for i in q if i['status'] == 'pending']
@@ -188,14 +211,28 @@ def process_queue():
                         break
                 save_queue(q)
 
+            if success:
+                print(f'[Article2Pod] Done: {slug}')
+            else:
+                print(f'[Article2Pod] Failed: {slug}')
+                print(f'  Reason: {error}')
+
             if stop_requested:
+                print('[Article2Pod] Stop requested — halting queue.')
                 break
+
     finally:
         if comfyui_started:
             stop_comfyui()
+            print('[Article2Pod] ComfyUI shut down.')
         processing     = False
         stop_requested = False
         current_slug   = None
+        pending_remain = [i for i in load_queue() if i['status'] == 'pending']
+        if pending_remain:
+            print(f'[Article2Pod] {len(pending_remain)} article(s) remaining in queue.')
+        else:
+            print('[Article2Pod] Queue complete.')
 
 def start_processing():
     global processing, stop_requested
