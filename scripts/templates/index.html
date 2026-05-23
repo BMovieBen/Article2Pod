@@ -591,6 +591,7 @@
     clearError();
     setAdding(true);
 
+    // Step 1: start the fetch
     const res  = await fetch('/api/add', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -604,7 +605,7 @@
       document.getElementById('addBtn').disabled = false;
       showError(data.error || 'Failed to add article.');
       if (data.switch_to_text) {
-        document.getElementById('urlInput').value = '';  // clear URL on switch
+        document.getElementById('urlInput').value = '';
         setMode('text');
         document.getElementById('textInput').placeholder =
           'Site is blocked. Paste Reader Mode content here...';
@@ -612,9 +613,13 @@
       return;
     }
 
-    document.getElementById('urlInput').value  = '';
-    document.getElementById('textInput').value = '';
-    document.getElementById('addBtn').disabled = false;
+    // Step 2: poll for result
+    const fetchId = data.fetch_id;
+    pollFetchResult(fetchId, () => {
+      document.getElementById('urlInput').value  = '';
+      document.getElementById('textInput').value = '';
+      document.getElementById('addBtn').disabled = false;
+    });
   }
 
   async function addText() {
@@ -638,9 +643,43 @@
       return;
     }
 
-    document.getElementById('urlInput').value  = '';
-    document.getElementById('textInput').value = '';
-    document.getElementById('addBtn').disabled = false;
+    const fetchId = data.fetch_id;
+    pollFetchResult(fetchId, () => {
+      document.getElementById('urlInput').value  = '';
+      document.getElementById('textInput').value = '';
+      document.getElementById('addBtn').disabled = false;
+    });
+  }
+
+  async function pollFetchResult(fetchId, onSuccess) {
+    const res  = await fetch(`/api/add/poll/${fetchId}`);
+    const data = await res.json();
+
+    if (data.status === 'pending') {
+      // Still working — check again in 1 second
+      setTimeout(() => pollFetchResult(fetchId, onSuccess), 1000);
+      return;
+    }
+
+    // Done or error
+    const ph = document.getElementById('adding-placeholder');
+
+    if (!res.ok || data.status === 'error') {
+      if (ph) ph.remove();
+      document.getElementById('addBtn').disabled = false;
+      showError(data.error || 'Failed to add article.');
+      if (data.switch_to_text) {
+        setMode('text');
+        document.getElementById('urlInput').value = '';
+        document.getElementById('textInput').placeholder =
+          'Site is blocked. Paste Reader Mode content here...';
+      }
+      return;
+    }
+
+    // Success — placeholder stays until queue poll replaces it
+    if (onSuccess) onSuccess();
+    updateGenerateBtn();
   }
 
   function setAdding(adding) {

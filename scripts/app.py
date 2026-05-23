@@ -23,7 +23,8 @@ from pipeline import (
 )
 from web_pipeline import (
     run_script, _should_switch_to_text,
-    process_text_paste, finish_add, find_mp3_for_slug
+    process_text_paste, finish_add, find_mp3_for_slug,
+    start_fetch, get_fetch_result
 )
 
 app = Flask(__name__, template_folder=os.path.join(SCRIPTS_DIR, 'templates'))
@@ -75,51 +76,30 @@ def api_add():
     if not url and not text:
         return jsonify({'error': 'No URL or text provided.'}), 400
 
-    temp      = get_temp_folder()
-    input_dir = get_input_folder()
-    os.makedirs(temp,      exist_ok=True)
-    os.makedirs(input_dir, exist_ok=True)
-
-    if mode == 'text':
-        if not text:
-            return jsonify({'error': 'No text provided.'}), 400
-        ok, msg, slug = process_text_paste(text, temp, input_dir)
-        if not ok:
-            return jsonify({'error': msg}), 400
-        result, error, code = finish_add(slug, '', mode, msg)
-        if error:
-            return jsonify({'error': error}), code
-        return jsonify(result)
-
-    # URL mode
-    if is_clipboard_domain(url):
+    # Check blocked domains immediately without subprocess
+    if mode == 'url' and is_clipboard_domain(url):
         return jsonify({
             'error':          'This site blocks scraping. Please use Text mode and paste from Reader Mode.',
             'switch_to_text': True,
         }), 400
 
-    ok, out, code = run_script('fetch-article.py', url, '--web')
+    fetch_id = start_fetch(url, mode, text)
+    return jsonify({'fetch_id': fetch_id})
 
-    if not ok or code == 2:
-        if _should_switch_to_text(ok, out, code):
-            return jsonify({
-                'error':          'This site is blocking automated scraping. Please use Text mode and paste from Reader Mode.',
-                'switch_to_text': True,
-            }), 400
-        return jsonify({'error': out}), 400
-
-    slug = None
-    for line in out.splitlines():
-        if line.strip().startswith('Slug:'):
-            slug = line.split(':', 1)[1].strip()
-            break
-    if not slug:
-        return jsonify({'error': 'Could not determine slug from output.'}), 400
-
-    result, error, status = finish_add(slug, url, mode, out)
-    if error:
-        return jsonify({'error': error}), status
-    return jsonify(result)
+@app.route('/api/add/poll/<fetch_id>', methods=['GET'])
+def api_add_poll(fetch_id):
+    result = get_fetch_result(fetch_id)
+    if result is None:
+        return jsonify({'error': 'Unknown fetch ID.'}), 404
+    if result['status'] == 'pending':
+        return jsonify({'status': 'pending'})
+    if result['status'] == 'error':
+        return jsonify({'status': 'error', 'error': result['error'],
+                        'switch_to_text': result.get('switch_to_text', False)}), 400
+    if result['status'] == 'switch_to_text':
+        return jsonify({'status': 'error', 'error': result['error'],
+                        'switch_to_text': True}), 400
+    return jsonify({'status': 'done', **result['result']})
 
 @app.route('/api/remove', methods=['POST'])
 def api_remove():

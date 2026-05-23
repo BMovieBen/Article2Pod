@@ -3,6 +3,7 @@
 
 import os, json, re, base64, time
 import subprocess
+import threading
 from utils import (
     safe_slug, clean_author, get_temp_folder, get_input_folder,
     apply_phonetic_replacements, is_clipboard_domain, is_youtube_url,
@@ -12,6 +13,88 @@ from utils import (
 from queue_manager import queue_lock, load_queue, save_queue
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+_fetch_results = {}  # slug -> result dict
+_fetch_lock    = threading.Lock()
+
+def _run_fetch_background(fetch_id, url, mode, text=''):
+    """Run fetch in background thread, store result for polling."""
+    temp      = get_temp_folder()
+    input_dir = get_input_folder()
+    os.makedirs(temp,      exist_ok=True)
+    os.makedirs(input_dir, exist_ok=True)
+
+    try:
+        if mode == 'text':
+            ok, msg, slug = process_text_paste(text, temp, input_dir)
+            if not ok:
+                with _fetch_lock:
+                    _fetch_results[fetch_id] = {'status': 'error', 'error': msg}
+                return
+        else:
+            ok, out, code = run_script('fetch-article.py', url, '--web')
+            if not ok or code == 2:
+                if _should_switch_to_text(ok, out, code):
+                    with _fetch_lock:
+                        _fetch_results[fetch_id] = {
+                            'status':         'switch_to_text',
+                            'error':          'This site is blocking automated scraping. Please use Text mode and paste from Reader Mode.',
+                            'switch_to_text': True,
+                        }
+                    return
+                with _fetch_lock:
+                    _fetch_results[fetch_id] = {'status': 'error', 'error': out}
+                return
+
+            slug = None
+            for line in out.splitlines():
+                if line.strip().startswith('Slug:'):
+                    slug = line.split(':', 1)[1].strip()
+                    break
+            if not slug:
+                with _fetch_lock:
+                    _fetch_results[fetch_id] = {
+                        'status': 'error',
+                        'error':  'Could not determine slug from output.'
+                    }
+                return
+            msg = out
+
+        # Run fetch-metadata
+        result, error, status = finish_add(slug, url, mode, msg)
+        if error:
+            with _fetch_lock:
+                _fetch_results[fetch_id] = {'status': 'error', 'error': error}
+            return
+
+        with _fetch_lock:
+            _fetch_results[fetch_id] = {'status': 'done', 'result': result}
+
+    except Exception as e:
+        with _fetch_lock:
+            _fetch_results[fetch_id] = {'status': 'error', 'error': str(e)}
+
+def start_fetch(url, mode, text=''):
+    """Start a background fetch. Returns fetch_id for polling."""
+    import uuid
+    fetch_id = str(uuid.uuid4())[:8]
+    with _fetch_lock:
+        _fetch_results[fetch_id] = {'status': 'pending'}
+    t = threading.Thread(
+        target=_run_fetch_background,
+        args=(fetch_id, url, mode, text),
+        daemon=True
+    )
+    t.start()
+    return fetch_id
+
+def get_fetch_result(fetch_id):
+    """Get result of a background fetch. Returns None if not found."""
+    with _fetch_lock:
+        result = _fetch_results.get(fetch_id)
+        if result and result.get('status') in ('done', 'error', 'switch_to_text'):
+            # Clean up after reading
+            del _fetch_results[fetch_id]
+        return result
 
 def run_script(script_name, *args, timeout=120):
     cmd = ['python', os.path.join(SCRIPTS_DIR, script_name)] + list(args)
