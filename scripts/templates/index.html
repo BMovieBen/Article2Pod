@@ -599,12 +599,12 @@
     const data = await res.json();
 
     if (!res.ok) {
-      // On failure, remove placeholder and re-enable button
       const ph = document.getElementById('adding-placeholder');
       if (ph) ph.remove();
       document.getElementById('addBtn').disabled = false;
       showError(data.error || 'Failed to add article.');
       if (data.switch_to_text) {
+        document.getElementById('urlInput').value = '';  // clear URL on switch
         setMode('text');
         document.getElementById('textInput').placeholder =
           'Site is blocked. Paste Reader Mode content here...';
@@ -612,9 +612,9 @@
       return;
     }
 
-    document.getElementById('urlInput').value = '';
+    document.getElementById('urlInput').value  = '';
+    document.getElementById('textInput').value = '';
     document.getElementById('addBtn').disabled = false;
-    // Placeholder stays — next poll will replace it with the real card
   }
 
   async function addText() {
@@ -638,9 +638,9 @@
       return;
     }
 
+    document.getElementById('urlInput').value  = '';
     document.getElementById('textInput').value = '';
     document.getElementById('addBtn').disabled = false;
-    // Placeholder stays — next poll will replace it with the real card
   }
 
   function setAdding(adding) {

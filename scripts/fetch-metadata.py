@@ -5,13 +5,13 @@ import os, sys, json, glob, random, time
 import requests
 from readability import Document
 from bs4 import BeautifulSoup
-from PIL import Image, ImageDraw
+from PIL import Image
 from io import BytesIO
 from urllib.parse import urlparse
 from ddgs import DDGS
 from utils import (
     safe_slug, get_title, get_author, get_site_name,
-    get_temp_folder, get_input_folder
+    get_temp_folder, get_input_folder, APP_DIR
 )
 
 INPUT_FOLDER = get_input_folder()
@@ -53,15 +53,6 @@ def fetch_and_resize_image(img_url, size=(500, 500)):
         print(f'  [Debug] Fetch error: {e}')
         return None
 
-def create_local_fallback_image(title, size=(500, 500)):
-    """Generate a colored square with the title's first letter. Zero network required."""
-    colors   = [(26,188,156),(52,152,219),(155,89,182),(230,126,34),(231,76,60),(52,73,94)]
-    img      = Image.new('RGB', size, color=random.choice(colors))
-    draw     = ImageDraw.Draw(img)
-    initial  = title[0].upper() if title else 'A'
-    draw.text((245, 245), initial, fill=(255, 255, 255))
-    return img
-
 def search_image(query):
     """Search DuckDuckGo images with progressive query shortening."""
     stop_words       = {'a','an','and','the','is','not','in','of','to','for',
@@ -95,7 +86,7 @@ def get_article_image(url, soup, title=''):
     1. OG image tag
     2. DuckDuckGo image search on title
     3. Google Favicon
-    4. Local generated fallback (always succeeds)
+    4. Default art fallback
     """
     # 1. OG image
     og = soup.find('meta', property='og:image')
@@ -122,9 +113,16 @@ def get_article_image(url, soup, title=''):
             print(f'  Art: using Google Favicon for {domain}')
             return img
 
-    # 4. Local fallback — always returns something
-    print('  Art: all network methods failed, generating local fallback.')
-    return create_local_fallback_image(title)
+    # 4. Default art fallback
+    default_art = os.path.join(APP_DIR, 'default_art.jpg')
+    if os.path.isfile(default_art):
+        print('  Art: using default_art.jpg')
+        try:
+            from PIL import Image
+            return Image.open(default_art).convert('RGB')
+        except Exception as e:
+            print(f'  Art: failed to load default_art.jpg: {e}')
+    return None
 
 def find_embedded_audio(soup, url):
     """Look for an embedded MP3 URL in the page DOM."""

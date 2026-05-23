@@ -122,7 +122,6 @@ def process_single(slug):
 
 def process_queue():
     global processing, stop_requested, current_slug
-
     temp  = get_temp_folder()
     queue = load_queue()
 
@@ -140,8 +139,7 @@ def process_queue():
                 for item in q:
                     if item['status'] == 'pending':
                         item['status'] = 'failed'
-                        item['error']  = \
-                            'ComfyUI is already running. Please close it first.'
+                        item['error']  = 'ComfyUI is already running. Please close it first.'
                 save_queue(q)
             processing = False
             return
@@ -170,15 +168,7 @@ def process_queue():
 
         print('[Article2Pod] ComfyUI ready.')
         comfyui_started = True
-
-        # Reset the item we pre-marked back to pending so the loop picks it up normally
-        with queue_lock:
-            q = load_queue()
-            for item in q:
-                if item['slug'] == current_slug and item['status'] == 'processing':
-                    item['status'] = 'pending'
-            save_queue(q)
-        current_slug = None
+        # Leave first item as 'processing' — main loop picks it up naturally
 
     try:
         while True:
@@ -188,12 +178,14 @@ def process_queue():
 
             with queue_lock:
                 q       = load_queue()
-                pending = [i for i in q if i['status'] == 'pending']
+                # Pick up both pending AND the pre-marked processing item
+                pending = [i for i in q if i['status'] in ('pending', 'processing')]
                 if not pending:
                     break
-                item           = pending[0]
-                item['status'] = 'processing'
-                save_queue(q)
+                item = pending[0]
+                if item['status'] != 'processing':
+                    item['status'] = 'processing'
+                    save_queue(q)
 
             slug         = item['slug']
             current_slug = slug

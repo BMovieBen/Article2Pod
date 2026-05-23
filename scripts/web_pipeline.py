@@ -13,11 +13,25 @@ from queue_manager import queue_lock, load_queue, save_queue
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 
-def run_script(script_name, *args):
-    cmd    = ['python', os.path.join(SCRIPTS_DIR, script_name)] + list(args)
-    result = subprocess.run(cmd, capture_output=True, text=True,
-                            encoding='utf-8', errors='replace')
-    return result.returncode == 0, result.stdout + result.stderr, result.returncode
+def run_script(script_name, *args, timeout=120):
+    cmd = ['python', os.path.join(SCRIPTS_DIR, script_name)] + list(args)
+    print(f'[Article2Pod] Running: {script_name} {" ".join(str(a) for a in args if not a.startswith("--"))}')
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            encoding='utf-8', errors='replace',
+            timeout=timeout
+        )
+        if result.stdout.strip():
+            for line in result.stdout.strip().splitlines():
+                print(f'  {line}')
+        if result.returncode != 0 and result.stderr.strip():
+            for line in result.stderr.strip().splitlines():
+                print(f'  [stderr] {line}')
+        return result.returncode == 0, result.stdout + result.stderr, result.returncode
+    except subprocess.TimeoutExpired:
+        print(f'  [ERROR] {script_name} timed out after {timeout}s')
+        return False, f'{script_name} timed out after {timeout}s', 1
 
 def _should_switch_to_text(ok, out, code):
     if code == 2:
@@ -53,7 +67,7 @@ def process_text_paste(text, temp, input_dir):
     with open(os.path.join(input_dir, 'clipboard-handoff.json'), 'w', encoding='utf-8') as f:
         json.dump(handoff, f)
 
-    body = apply_phonetic_replacements(body)
+    body    = apply_phonetic_replacements(body)
     header  = f'{title}\r\nWritten by {author}\r\n\r\n\r\n'
     content = header + body.replace('\n', '\r\n') + '\r\n[pause:3000]'
 
@@ -62,6 +76,7 @@ def process_text_paste(text, temp, input_dir):
               encoding='utf-8', newline='\r\n') as f:
         f.write(content)
 
+    print(f'[Article2Pod] Text paste processed: {slug}')
     return True, f'  Slug: {slug}', slug
 
 def finish_add(slug, url, mode, fetch_output):
@@ -81,10 +96,14 @@ def finish_add(slug, url, mode, fetch_output):
         ok, meta_out, _ = run_script('fetch-metadata.py', '--clipboard')
 
     if not ok:
+        print(f'[Article2Pod] fetch-metadata failed for: {slug}')
         return None, f'fetch-metadata failed:\n{meta_out}', 400
 
     json_path = os.path.join(temp, f'{slug}.json')
     if not os.path.isfile(json_path):
+        print(f'[Article2Pod] Metadata JSON not found for slug: {slug}')
+        print(f'  Expected: {json_path}')
+        print(f'  Files in temp: {os.listdir(temp)}')
         return None, 'Metadata file not found after fetch.', 400
 
     with open(json_path, 'r', encoding='utf-8') as f:
@@ -105,13 +124,15 @@ def finish_add(slug, url, mode, fetch_output):
         'album_art':  meta.get('album_art'),
         'source_url': url,
         'error':      None,
-        'added_at':   time.time(),   # unix timestamp
+        'added_at':   time.time(),
     }
 
     with queue_lock:
         queue = load_queue()
         queue.append(item)
         save_queue(queue)
+
+    print(f'[Article2Pod] Added to queue: {meta.get("title", slug)}')
 
     return {
         'slug':          slug,
@@ -123,15 +144,13 @@ def finish_add(slug, url, mode, fetch_output):
     }, None, 200
 
 def find_mp3_for_slug(slug, title=''):
-    """Find the MP3 in podcasts folder for a given slug."""
+    """Find the MP3 in temp or podcasts folder for a given slug."""
     import glob
-    podcasts = get_podcasts_folder()
-    # Try temp first (copy saved by tag-mp3.py)
     temp_mp3 = os.path.join(get_temp_folder(), f'{slug}.mp3')
     if os.path.isfile(temp_mp3):
         return temp_mp3
-    # Search podcasts folder
-    matches = glob.glob(os.path.join(podcasts, '**', '*.mp3'), recursive=True)
+    podcasts = get_podcasts_folder()
+    matches  = glob.glob(os.path.join(podcasts, '**', '*.mp3'), recursive=True)
     for m in matches:
         if slug in os.path.basename(m).lower():
             return m
