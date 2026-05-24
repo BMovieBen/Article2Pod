@@ -188,6 +188,14 @@ def parse_reader_mode(text):
     Parse reader mode pasted text.
     Returns (site, title, author, body).
     """
+
+    # Normalize line endings and smart quotes
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    text = text.replace('\u2018', "'").replace('\u2019', "'")  # smart single quotes
+    text = text.replace('\u201c', '"').replace('\u201d', '"')  # smart double quotes
+    text = text.replace('\u2013', '-').replace('\u2014', '-')  # em/en dashes
+    # ... rest of function unchanged
+
     # Normalize line endings
     text   = text.replace('\r\n', '\n').replace('\r', '\n')
     lines  = text.splitlines()

@@ -545,11 +545,10 @@
     <div class="error-banner" id="errorBanner"></div>
   </div>
 
-  <!-- Queue -->
+<!-- Queue -->
   <div class="queue-header">Queue</div>
-  <div id="queueList">
-    <div class="queue-empty" id="queueEmpty">No articles queued yet.</div>
-  </div>
+  <div id="queueList"></div>
+  <div class="queue-empty" id="queueEmpty">No articles queued yet.</div>
 </main>
 
 <!-- Generate / Stop -->
@@ -591,7 +590,6 @@
     clearError();
     setAdding(true);
 
-    // Step 1: start the fetch
     const res  = await fetch('/api/add', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -613,9 +611,8 @@
       return;
     }
 
-    // Step 2: poll for result
-    const fetchId = data.fetch_id;
-    pollFetchResult(fetchId, () => {
+    activeFetchId = data.fetch_id;
+    pollFetchResult(data.fetch_id, () => {
       document.getElementById('urlInput').value  = '';
       document.getElementById('textInput').value = '';
       document.getElementById('addBtn').disabled = false;
@@ -643,30 +640,44 @@
       return;
     }
 
-    const fetchId = data.fetch_id;
-    pollFetchResult(fetchId, () => {
+    activeFetchId = data.fetch_id;
+    pollFetchResult(data.fetch_id, () => {
       document.getElementById('urlInput').value  = '';
       document.getElementById('textInput').value = '';
       document.getElementById('addBtn').disabled = false;
     });
   }
 
+  let activeFetchId = null;  // track current fetch to prevent stale polls
+  
   async function pollFetchResult(fetchId, onSuccess) {
-    const res  = await fetch(`/api/add/poll/${fetchId}`);
-    const data = await res.json();
+    // If a newer fetch has started, abandon this poll
+    if (fetchId !== activeFetchId) return;
+
+    let res, data;
+    try {
+      res  = await fetch(`/api/add/poll/${fetchId}`);
+      data = await res.json();
+    } catch (e) {
+      const ph = document.getElementById('adding-placeholder');
+      if (ph) ph.remove();
+      document.getElementById('addBtn').disabled = false;
+      showError('Network error while fetching article.');
+      activeFetchId = null;
+      return;
+    }
 
     if (data.status === 'pending') {
-      // Still working — check again in 1 second
       setTimeout(() => pollFetchResult(fetchId, onSuccess), 1000);
       return;
     }
 
-    // Done or error
     const ph = document.getElementById('adding-placeholder');
 
     if (!res.ok || data.status === 'error') {
       if (ph) ph.remove();
       document.getElementById('addBtn').disabled = false;
+      activeFetchId = null;
       showError(data.error || 'Failed to add article.');
       if (data.switch_to_text) {
         setMode('text');
@@ -677,9 +688,10 @@
       return;
     }
 
-    // Success — placeholder stays until queue poll replaces it
+    if (ph) ph.remove();
+    activeFetchId = null;
     if (onSuccess) onSuccess();
-    updateGenerateBtn();
+    pollQueue();  // immediately render the new item
   }
 
   function setAdding(adding) {
@@ -687,18 +699,16 @@
     const list  = document.getElementById('queueList');
     const empty = document.getElementById('queueEmpty');
     if (adding) {
+      // Always create a fresh placeholder
       const existing = document.getElementById('adding-placeholder');
-      if (!existing) {
-        const div = document.createElement('div');
-        div.className = 'queue-card';
-        div.id = 'adding-placeholder';
-        div.innerHTML = `<div class="adding-overlay"><div class="spinner"></div>Fetching article...</div>`;
-        // Insert at TOP of list
-        list.insertBefore(div, list.firstChild);
-      }
+      if (existing) existing.remove();
+      const div = document.createElement('div');
+      div.className = 'queue-card';
+      div.id = 'adding-placeholder';
+      div.innerHTML = `<div class="adding-overlay"><div class="spinner"></div>Fetching article...</div>`;
+      list.insertBefore(div, list.firstChild);
       empty.style.display = 'none';
     }
-    // Never remove placeholder here — renderQueue handles replacement
   }
 
   function renderSingleCard(data) {
@@ -797,14 +807,10 @@
     const empty = document.getElementById('queueEmpty');
     const ph    = document.getElementById('adding-placeholder');
 
-    if (queue.length === 0 && !ph) {
-      list.innerHTML = '';
-      list.appendChild(empty);
-      empty.style.display = '';
-      return;
-    }
+    // Show/hide empty message
+    const showEmpty = queue.length === 0 && !ph;
+    empty.style.display = showEmpty ? '' : 'none';
 
-    empty.style.display = 'none';
     list.innerHTML = '';
 
     if (ph) list.appendChild(ph);

@@ -54,30 +54,19 @@ def fetch_and_resize_image(img_url, size=(500, 500)):
         return None
 
 def search_image(query):
-    """Search DuckDuckGo images with progressive query shortening."""
-    stop_words       = {'a','an','and','the','is','not','in','of','to','for',
-                        'on','with','by','at','from','as','it'}
-    important_words  = [w for w in query.split() if w.lower() not in stop_words]
-    queries = list(dict.fromkeys([
-        query,
-        ' '.join(query.split()[:5]),
-        ' '.join(important_words[:4]),
-        important_words[0] if important_words else query,
-    ]))
-
-    for q in queries:
-        print(f'  [Debug] Searching DDG for: \'{q}\'')
-        try:
-            with DDGS() as ddgs:
-                results = list(ddgs.images(q, max_results=5))
-            if results:
-                for result in results:
-                    img = fetch_and_resize_image(result['image'])
-                    if img:
-                        return img
-        except Exception as e:
-            print(f'  [Debug] DDG search error: {e}')
-        time.sleep(1)
+    """Search DuckDuckGo images — single attempt, fail fast."""
+    clean_query = ' '.join(query.split()[:5])  # first 5 words only
+    print(f'  [Debug] Searching DDG for: \'{clean_query}\'')
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.images(clean_query, max_results=5))
+        if results:
+            for result in results:
+                img = fetch_and_resize_image(result['image'])
+                if img:
+                    return img
+    except Exception as e:
+        print(f'  [Debug] DDG search error: {e}')
     return None
 
 def get_article_image(url, soup, title=''):
