@@ -115,6 +115,7 @@ def api_remove():
             return jsonify({'error': 'Cannot remove item currently being processed.'}), 400
         save_queue([i for i in queue if i['slug'] != slug])
         delete_temp_files(slug)
+    print(f'[Article2Pod] Removed: {item.get("title", slug)}')
     return jsonify({'ok': True})
 
 @app.route('/api/generate', methods=['POST'])
