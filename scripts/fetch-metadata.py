@@ -148,13 +148,62 @@ def find_embedded_audio(soup, url):
     return None
 
 def fetch_metadata(url):
-    # YouTube — skip, metadata fetched by fetch-youtube.py
+    # YouTube — fetch metadata via yt-dlp now instead of waiting for download
     for hf in glob.glob(os.path.join(TEMP_FOLDER, 'youtube-handoff-*.json')):
         with open(hf, 'r', encoding='utf-8') as f:
             hdata = json.load(f)
         if hdata.get('source_url') == url:
             slug = hdata.get('slug')
-            print(f'  YouTube URL — metadata will be fetched during audio download.')
+            print(f'  YouTube URL — fetching metadata via yt-dlp...')
+
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ['yt-dlp', '--dump-json', '--no-playlist', url],
+                    capture_output=True, text=True, timeout=30
+                )
+                if result.returncode == 0:
+                    import json as _json
+                    yt    = _json.loads(result.stdout)
+                    title    = yt.get('title', slug)
+                    channel  = yt.get('channel', yt.get('uploader', 'YouTube'))
+                    playlist = yt.get('playlist_title')
+                    album    = playlist if playlist else channel
+                    thumbnail = yt.get('thumbnail')
+
+                    # Update the minimal sidecar with real metadata
+                    meta = {
+                        'title':      title,
+                        'artist':     channel,
+                        'album':      album,
+                        'album_art':  None,
+                        'slug':       slug,
+                        'source_url': url,
+                    }
+
+                    # Get thumbnail
+                    if thumbnail:
+                        img = fetch_and_resize_image(thumbnail)
+                        if img:
+                            art_path = os.path.join(TEMP_FOLDER, f'{slug}.jpg')
+                            img.save(art_path, 'JPEG', quality=90)
+                            meta['album_art'] = art_path
+                            print(f'  Art saved:  {art_path}')
+
+                    json_path = os.path.join(TEMP_FOLDER, f'{slug}.json')
+                    with open(json_path, 'w', encoding='utf-8') as f:
+                        json.dump(meta, f, indent=2, ensure_ascii=False)
+
+                    print(f'  Title:      {title}')
+                    print(f'  Channel:    {channel}')
+                    print(f'  Album:      {album}')
+                    print(f'  Meta saved: {json_path}')
+                    return slug
+
+            except Exception as e:
+                print(f'  yt-dlp metadata failed: {e}, using placeholder.')
+
+            # Fallback — return slug with minimal metadata as before
             return slug
 
     # Clipboard handoff from fetch-article
