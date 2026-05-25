@@ -57,16 +57,22 @@ def clean_author(text):
     return re.sub(r'  +', ' ', text)
 
 def get_title(soup, doc):
+    # 1. Try <h1> — but skip short ones that are likely site names/logos
     h1 = soup.find('h1')
     if h1:
         text = re.sub(r'  +', ' ', h1.get_text(separator=' ', strip=True))
-        if text and len(text) > 5:
+        if text and len(text) > 15 and ' ' in text:
             return text
+
+    # 2. og:title — strip site name suffix
     og = soup.find('meta', property='og:title')
     if og and og.get('content', '').strip():
-        title = re.sub(r'\s*[\:\|]\s*.{3,40}$', '', og['content'].strip()).strip()
+        title = og['content'].strip()
+        title = re.sub(r'\s*[\:\|]\s*.{3,40}$', '', title).strip()
         if title:
             return title
+
+    # 3. Fallback to readability
     return doc.short_title() or 'Untitled'
 
 def get_author(soup):
