@@ -3,6 +3,7 @@
 
 import os, sys, json, glob, random, time
 import requests
+import re
 from readability import Document
 from bs4 import BeautifulSoup
 from PIL import Image
@@ -69,7 +70,7 @@ def search_image(query):
         print(f'  [Debug] DDG search error: {e}')
     return None
 
-def get_article_image(url, soup, title=''):
+def get_article_image(url, soup, title='', site_hint=''):
     """
     Try to get album art in order:
     1. OG image tag
@@ -93,8 +94,11 @@ def get_article_image(url, soup, title=''):
             print('  Art: found via image search')
             return img
 
-    # 3. Google Favicon — skips gracefully if no domain (clipboard mode)
+    # 3. Google Favicon — use url domain or site_hint from clipboard
     domain = urlparse(url).netloc.replace('www.', '') if url else ''
+    if not domain and site_hint:
+        # Strip any path/protocol from site_hint — it may be raw like "ktla.com"
+        domain = re.sub(r'^https?://', '', site_hint).split('/')[0].replace('www.', '').strip()
     if domain:
         img = fetch_and_resize_image(
             f'https://www.google.com/s2/favicons?sz=128&domain={domain}')
@@ -185,7 +189,7 @@ def fetch_metadata(url):
                            'audio_url': audio_url}, f)
             print(f'  Audio:      embedded MP3 found, will download directly.')
 
-    img      = get_article_image(url, full_soup, title=title)
+    img      = get_article_image(url, full_soup, title=title, site_hint=site_name)
     art_path = os.path.join(TEMP_FOLDER, f'{slug}.jpg')
     img.save(art_path, 'JPEG', quality=90)
     print(f'  Art saved:  {art_path}')
