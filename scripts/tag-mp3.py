@@ -4,13 +4,13 @@ import os, sys, json, shutil, glob
 from mutagen.id3 import ID3, TIT2, TPE1, TPE2, TALB, APIC, TRCK, ID3NoHeaderError
 from utils import (
     get_input_folder, get_audio_folder, get_temp_folder,
-    get_podcasts_folder, get_track_log, sanitize_filename
+    get_track_log, sanitize_filename, get_output_dir
 )
 
 AUDIO_FOLDER    = get_audio_folder()
 TEMP_FOLDER     = get_temp_folder()
 INPUT_FOLDER    = get_input_folder()
-PODCASTS_FOLDER = get_podcasts_folder()
+OUTPUT_DIR = get_output_dir()
 TRACK_LOG       = get_track_log()
 
 def load_track_log():
@@ -61,8 +61,7 @@ def move_mp3(mp3_path, slug, meta):
     max_title  = max(10, 150 - len(site_part) - len(' - .mp3'))
     filename   = f'{site_part} - {safe_title[:max_title].rstrip()}.mp3'
 
-    dest_folder = os.path.join(PODCASTS_FOLDER,
-                               sanitize_filename(site),
+    dest_folder = os.path.join(OUTPUT_DIR, sanitize_filename(site),
                                sanitize_filename(author))
     os.makedirs(dest_folder, exist_ok=True)
     dest_path = os.path.join(dest_folder, filename)
@@ -96,10 +95,7 @@ def main(slug):
     tag_mp3(mp3_path, meta, art_path, track_number)
     print(f'  Tags written.')
 
-    # Copy to temp for web UI download before moving
-    shutil.copy2(mp3_path, os.path.join(TEMP_FOLDER, f'{slug}.mp3'))
-
-    dest = move_mp3(mp3_path, slug, meta)
+    dest = move_mp3(mp3_path, slug, meta)  # move directly, no temp copy
     print(f'  Moved to:   {dest}')
 
     article_txt = os.path.join(INPUT_FOLDER, 'article.txt')

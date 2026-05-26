@@ -10,8 +10,7 @@ sys.path.insert(0, SCRIPTS_DIR)
 
 from utils import (
     load_config, get_temp_folder, get_input_folder,
-    is_clipboard_domain, is_youtube_url, sanitize_filename,
-    get_podcasts_folder
+    is_clipboard_domain, is_youtube_url, sanitize_filename
 )
 from queue_manager import (
     queue_lock, load_queue, save_queue, get_queue_item,

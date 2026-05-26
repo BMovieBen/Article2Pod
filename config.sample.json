@@ -17,7 +17,6 @@
   "input_folder": "C:\\ComfyUI\\input",
   "audio_folder": "C:\\ComfyUI\\output\\audio",
   "output_folder": "C:\\ComfyUI\\output",
-  "podcasts_folder": "D:\\Podcasts",
   "track_log": "log\\track-log.json",
   "user_agent": "Mozilla/5.0",
   "ad_strip_markers": [

@@ -8,7 +8,7 @@ from utils import (
     safe_slug, clean_author, get_temp_folder, get_input_folder,
     apply_phonetic_replacements, is_clipboard_domain, is_youtube_url,
     fetch_and_resize_image, JUNK_PATTERNS, READING_TIME_RE, parse_reader_mode,
-    sanitize_filename, get_podcasts_folder
+    sanitize_filename
 )
 from queue_manager import queue_lock, load_queue, save_queue
 
@@ -227,13 +227,11 @@ def finish_add(slug, url, mode, fetch_output):
     }, None, 200
 
 def find_mp3_for_slug(slug, title=''):
-    """Find the MP3 in temp or podcasts folder for a given slug."""
+    """Find the MP3 in the output folder."""
     import glob
-    temp_mp3 = os.path.join(get_temp_folder(), f'{slug}.mp3')
-    if os.path.isfile(temp_mp3):
-        return temp_mp3
-    podcasts = get_podcasts_folder()
-    matches  = glob.glob(os.path.join(podcasts, '**', '*.mp3'), recursive=True)
+    from utils import get_output_dir
+    output_dir = get_output_dir()
+    matches    = glob.glob(os.path.join(output_dir, '**', '*.mp3'), recursive=True)
     for m in matches:
         if slug in os.path.basename(m).lower():
             return m

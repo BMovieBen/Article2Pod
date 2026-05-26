@@ -30,7 +30,8 @@ def get_output_folder():   return get_required('output_folder')
 def get_comfy_url():       return get_required('comfy_url')
 def get_workflow_file():
     return os.path.join(APP_DIR, get_required('workflow_file'))
-def get_podcasts_folder(): return get_required('podcasts_folder')
+def get_output_dir():
+    return os.path.join(APP_DIR, 'output')
 def get_track_log():
     return os.path.join(APP_DIR, get_required('track_log'))
 def get_user_agent():      return get_required('user_agent')
