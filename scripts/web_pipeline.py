@@ -227,14 +227,27 @@ def finish_add(slug, url, mode, fetch_output):
     }, None, 200
 
 def find_mp3_for_slug(slug, title=''):
-    """Find the MP3 in the output folder."""
+    """Find the MP3 in the output folder by title match."""
     import glob
-    from utils import get_output_dir
+    from utils import get_output_dir, sanitize_filename
     output_dir = get_output_dir()
     matches    = glob.glob(os.path.join(output_dir, '**', '*.mp3'), recursive=True)
+
+    if not matches:
+        return None
+
+    # Try matching by sanitized title in filename
+    if title:
+        safe_title = sanitize_filename(title).lower()
+        for m in matches:
+            if safe_title[:20] in os.path.basename(m).lower():
+                return m
+
+    # Fallback: match by slug words
+    slug_words = slug.replace('-', ' ').split()[:4]
     for m in matches:
-        if slug in os.path.basename(m).lower():
+        basename = os.path.basename(m).lower()
+        if all(w in basename for w in slug_words):
             return m
-        if title and title[:20].lower() in os.path.basename(m).lower():
-            return m
+
     return None

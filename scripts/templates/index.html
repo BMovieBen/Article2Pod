@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Article2Pod</title>
@@ -562,6 +563,9 @@
   let mode       = 'url';
   let isProcessing = false;
   let stopPending  = false;
+  let pollInterval    = 10000;  // default idle interval
+  let pollTimer       = null;
+  let confirmingSlug  = null;   // slug currently showing delete confirmation
   // Track which cards have output panel open
   const outputOpen = {};
 
@@ -649,7 +653,7 @@
   }
 
   let activeFetchId = null;  // track current fetch to prevent stale polls
-  
+
   async function pollFetchResult(fetchId, onSuccess) {
     // If a newer fetch has started, abandon this poll
     if (fetchId !== activeFetchId) return;
@@ -730,13 +734,17 @@
     const data = await res.json();
     if (!res.ok) {
       showError(data.error || 'Could not start generation.');
+      return;
     }
+    // Switch to fast polling immediately
+    schedulePoll(0);
   }
 
   async function stopQueue() {
     stopPending = true;
     document.getElementById('generateBtn').textContent = 'Stopping...';
     await fetch('/api/stop', {method: 'POST'});
+    schedulePoll(0);
   }
 
   async function removeItem(slug) {
@@ -778,27 +786,50 @@
   }
 
   // ---- Polling ----
+  function schedulePoll(interval) {
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = setTimeout(async () => {
+      await pollQueue();
+    }, interval);
+  }
+
   async function pollQueue() {
-    const res  = await fetch('/api/queue');
-    const data = await res.json();
+    // Don't poll while a delete confirmation is showing
+    if (confirmingSlug) {
+      schedulePoll(1000);  // check again soon in case it clears
+      return;
+    }
 
-    isProcessing = data.processing;
-    renderQueue(data.queue, data.processing);
+    try {
+      const res  = await fetch('/api/queue');
+      const data = await res.json();
 
-    const dot = document.getElementById('statusDot');
-    dot.classList.toggle('active', data.processing);
+      isProcessing = data.processing;
+      renderQueue(data.queue, data.processing);
 
-    const btn = document.getElementById('generateBtn');
-    if (data.processing) {
-      btn.textContent = stopPending ? 'Stopping...' : 'Stop';
-      btn.classList.add('stop');
-      btn.disabled = false;
-    } else {
-      stopPending = false;
-      btn.classList.remove('stop');
-      btn.textContent = 'Generate';
-      const hasPending = data.queue.some(i => i.status === 'pending' || i.status === 'failed');
-      btn.disabled = !hasPending;
+      const dot = document.getElementById('statusDot');
+      dot.classList.toggle('active', data.processing);
+
+      const btn = document.getElementById('generateBtn');
+      if (data.processing) {
+        btn.textContent = stopPending ? 'Stopping...' : 'Stop';
+        btn.classList.add('stop');
+        btn.disabled = stopPending;
+      } else {
+        stopPending = false;
+        btn.classList.remove('stop');
+        btn.textContent = 'Generate';
+        const hasPending = data.queue.some(
+          i => i.status === 'pending' || i.status === 'failed'
+        );
+        btn.disabled = !hasPending;
+      }
+
+      // Adaptive interval — fast when processing, slow when idle
+      schedulePoll(data.processing ? 2000 : 10000);
+
+    } catch (e) {
+      schedulePoll(5000);  // back off on error
     }
   }
 
@@ -828,10 +859,15 @@
       if (item.status === 'processing') {
         actionHtml = `<div class="spinner"></div>`;
       } else if (item.status === 'done') {
-        actionHtml = `<a class="btn-icon success"
-          href="/api/download/${item.slug}"
-          download
-          title="Download MP3">&#9654;</a>`;
+        actionHtml = `
+          <a class="btn-icon success"
+            href="/api/download/${item.slug}"
+            download
+            title="Download MP3">&#8595;</a>
+          <button class="btn-icon danger"
+            onclick="confirmDelete('${item.slug}', '${escHtml(item.title || item.slug)}')"
+            title="Delete MP3"
+            style="font-size:14px;"><i class="fa-solid fa-trash"></i></button>`;
       } else if (item.status === 'failed') {
         actionHtml = `<span style="color:var(--danger);font-size:18px;"
           title="${escHtml(item.error || '')}">&#10005;</span>`;
@@ -879,8 +915,39 @@
               .replace(/"/g,'&quot;').replace(/'/g,'&#039;');
   }
 
-  // Poll every 1 second
-  setInterval(pollQueue, 1000);
+  function confirmDelete(slug, title) {
+    confirmingSlug = slug;
+    const card = document.querySelector(`.queue-card[data-slug="${slug}"]`);
+    if (!card) return;
+    const actions = card.querySelector('.card-actions');
+    actions.innerHTML = `
+      <span style="font-size:12px;color:var(--muted);margin-right:6px;">Delete?</span>
+      <button class="btn-icon success" onclick="deleteItem('${slug}')" title="Yes">&#10003;</button>
+      <button class="btn-icon" onclick="cancelDelete()" title="No">&#10005;</button>
+    `;
+  }
+
+  function cancelDelete() {
+    confirmingSlug = null;
+    pollQueue();  // immediate refresh to restore card
+  }
+
+  async function deleteItem(slug) {
+    confirmingSlug = null;
+    const res = await fetch('/api/delete', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({slug}),
+    });
+    if (!res.ok) {
+      const d = await res.json();
+      showError(d.error || 'Could not delete file.');
+    }
+    pollQueue();
+  }
+
+  // Start polling
+  schedulePoll(0);  // immediate first poll
   pollQueue();
 </script>
 </body>

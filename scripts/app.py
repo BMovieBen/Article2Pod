@@ -34,6 +34,10 @@ class SuppressPollingFilter(logging.Filter):
         msg = record.getMessage()
         if re.search(r'"(GET|POST|PUT|DELETE|PATCH) .* HTTP/\d\.\d" [23]\d\d', msg):
             return False
+        if '/api/add/poll/' in msg:
+            return False
+        if 'Bad request version' in msg or '\\x16\\x03' in msg:
+            return False
         return True
 
 logging.getLogger('werkzeug').addFilter(SuppressPollingFilter())
@@ -141,11 +145,11 @@ def api_stop():
 
 @app.route('/api/download/<slug>')
 def api_download(slug):
-    mp3_path = find_mp3_for_slug(slug)
-    if not mp3_path:
-        return jsonify({'error': 'MP3 not found.'}), 404
     item  = get_queue_item(slug)
     title = item.get('title', slug) if item else slug
+    mp3_path = find_mp3_for_slug(slug, title)
+    if not mp3_path:
+        return jsonify({'error': 'MP3 not found.'}), 404
     return send_file(mp3_path, mimetype='audio/mpeg',
                      as_attachment=True,
                      download_name=f'{title}.mp3')
@@ -153,6 +157,45 @@ def api_download(slug):
 @app.route('/api/status', methods=['GET'])
 def api_status():
     return jsonify(get_state())
+
+@app.route('/api/delete', methods=['POST'])
+def api_delete():
+    slug = request.json.get('slug')
+    if not slug:
+        return jsonify({'error': 'No slug provided.'}), 400
+
+    with queue_lock:
+        queue = load_queue()
+        item  = next((i for i in queue if i['slug'] == slug), None)
+        if not item:
+            return jsonify({'error': 'Item not found.'}), 404
+        if item['status'] != 'done':
+            return jsonify({'error': 'Can only delete completed items.'}), 400
+
+        # Find and delete the MP3 from output folder
+        from web_pipeline import find_mp3_for_slug
+        from utils import get_output_dir
+        mp3_path = find_mp3_for_slug(slug, item.get('title', ''))
+        if mp3_path and os.path.isfile(mp3_path):
+            os.remove(mp3_path)
+            print(f'[Article2Pod] Deleted: {mp3_path}')
+            # Clean up empty parent folders
+            parent = os.path.dirname(mp3_path)
+            output_dir = get_output_dir()
+            for folder in [parent, os.path.dirname(parent)]:
+                if folder != output_dir:
+                    try:
+                        if os.path.isdir(folder) and not os.listdir(folder):
+                            os.rmdir(folder)
+                    except Exception:
+                        pass
+
+        # Remove from queue and clean temp files
+        save_queue([i for i in queue if i['slug'] != slug])
+        delete_temp_files(slug)
+
+    print(f'[Article2Pod] Removed from queue: {item.get("title", slug)}')
+    return jsonify({'ok': True})
 
 # ============================================================
 # MAIN
