@@ -499,6 +499,68 @@
     font-size: 13px;
     color: var(--muted);
   }
+
+  .library-accordion {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 80px;
+    overflow: hidden;
+  }
+
+  .library-header {
+    width: 100%;
+    background: none;
+    border: none;
+    color: var(--text);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--sans);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    padding: 14px 16px;
+    transition: background 0.2s;
+  }
+
+  .library-header:hover {
+    background: var(--surface2);
+  }
+
+  .library-body {
+    border-top: 1px solid var(--border);
+  }
+
+  .library-card {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    overflow: hidden;
+  }
+
+  .library-card:last-child {
+    border-bottom: none;
+  }
+
+  .library-load-more {
+    width: 100%;
+    background: none;
+    border: none;
+    border-top: 1px solid var(--border);
+    color: var(--accent);
+    cursor: pointer;
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 12px;
+    transition: background 0.2s;
+  }
+
+  .library-load-more:hover {
+    background: var(--surface2);
+  }
 </style>
 </head>
 <body>
@@ -550,6 +612,21 @@
   <div class="queue-header">Queue</div>
   <div id="queueList"></div>
   <div class="queue-empty" id="queueEmpty">No articles queued yet.</div>
+<!-- Library accordion -->
+  <div class="library-accordion" id="libraryAccordion">
+    <button class="library-header" onclick="toggleLibrary()" id="libraryHeader">
+      <span>Library</span>
+      <span id="libraryCount" style="color:var(--muted);font-size:12px;font-weight:400;"></span>
+      <span id="libraryChevron" style="margin-left:auto;font-size:14px;color:var(--muted);">&#8964;</span>
+    </button>
+    <div class="library-body" id="libraryBody" style="display:none;">
+      <div id="libraryList"></div>
+      <button class="library-load-more" id="libraryLoadMore"
+              onclick="loadLibrary()" style="display:none;">
+        Load more
+      </button>
+    </div>
+  </div>
 </main>
 
 <!-- Generate / Stop -->
@@ -566,6 +643,10 @@
   let pollInterval    = 10000;  // default idle interval
   let pollTimer       = null;
   let confirmingSlug  = null;   // slug currently showing delete confirmation
+  let libraryOpen    = false;
+  let libraryOffset  = 0;
+  let libraryHasMore = false;
+  let confirmingLibPath = null;
   // Track which cards have output panel open
   const outputOpen = {};
 
@@ -831,6 +912,14 @@
     } catch (e) {
       schedulePoll(5000);  // back off on error
     }
+
+    // Refresh library count if open
+    if (libraryOpen) {
+      fetch(`/api/library?offset=0&limit=0`).then(r => r.json()).then(data => {
+        document.getElementById('libraryCount').textContent =
+          `(${data.total} podcast${data.total !== 1 ? 's' : ''})`;
+      }).catch(() => {});
+    }
   }
 
   function renderQueue(queue, processing) {
@@ -865,7 +954,7 @@
             download
             title="Download MP3">&#8595;</a>
           <button class="btn-icon danger"
-            onclick="confirmDelete('${item.slug}', '${escHtml(item.title || item.slug)}')"
+            onclick="confirmDelete('${item.slug}', '${escHtml(escJs(item.title || item.slug))}')"
             title="Delete MP3"
             style="font-size:14px;"><i class="fa-solid fa-trash"></i></button>`;
       } else if (item.status === 'failed') {
@@ -915,6 +1004,11 @@
               .replace(/"/g,'&quot;').replace(/'/g,'&#039;');
   }
 
+  function escJs(str) {
+  if (!str) return '';
+  return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
+  }
+
   function confirmDelete(slug, title) {
     confirmingSlug = slug;
     const card = document.querySelector(`.queue-card[data-slug="${slug}"]`);
@@ -922,7 +1016,7 @@
     const actions = card.querySelector('.card-actions');
     actions.innerHTML = `
       <span style="font-size:12px;color:var(--muted);margin-right:6px;">Delete?</span>
-      <button class="btn-icon success" onclick="deleteItem('${slug}')" title="Yes">&#10003;</button>
+      <button class="btn-icon success" onclick="deleteItem('${escHtml(escJs(slug))}')" title="Yes">&#10003;</button>
       <button class="btn-icon" onclick="cancelDelete()" title="No">&#10005;</button>
     `;
   }
@@ -944,6 +1038,112 @@
       showError(d.error || 'Could not delete file.');
     }
     pollQueue();
+  }
+
+  async function toggleLibrary() {
+    libraryOpen = !libraryOpen;
+    const body    = document.getElementById('libraryBody');
+    const chevron = document.getElementById('libraryChevron');
+    body.style.display = libraryOpen ? '' : 'none';
+    chevron.innerHTML  = libraryOpen ? '&#8963;' : '&#8964;';
+    if (libraryOpen) await loadLibrary();
+  }
+
+  async function loadLibrary() {
+    const res  = await fetch('/api/library');
+    const data = await res.json();
+
+    const list = document.getElementById('libraryList');
+    list.innerHTML = '';
+
+    document.getElementById('libraryCount').textContent =
+      `(${data.total} podcast${data.total !== 1 ? 's' : ''})`;
+
+    data.items.forEach(item => {
+      try {
+        const card = document.createElement('div');
+        card.className       = 'library-card';
+        card.dataset.libpath = item.path;
+
+        const artHtml = item.art_b64
+          ? `<img class="card-art" src="${item.art_b64}" alt="">`
+          : `<div class="card-art-placeholder">&#9834;</div>`;
+
+        // Completely removed btoa(). Just generate a safe, random ID for the UI element.
+        const safeId = Math.random().toString(36).substring(2, 10);
+
+        card.innerHTML = `
+          <div class="card-main">
+            ${artHtml}
+            <div class="card-info">
+              <div class="card-title">${escHtml(item.title)}</div>
+              <div class="card-meta">
+                ${escHtml(item.site)}${item.site && item.author ? ' &middot; ' : ''}${escHtml(item.author)}
+              </div>
+            </div>
+            <div class="card-actions" id="lib-actions-${safeId}">
+              <a class="btn-icon success"
+                href="/api/library/download?path=${encodeURIComponent(item.path)}"
+                download="${escHtml(item.title)}.mp3"
+                title="Download">&#8595;</a>
+              <button class="btn-icon danger"
+                onclick="confirmLibDelete('${escHtml(escJs(item.path))}', '${escHtml(escJs(item.title))}')"
+                title="Delete">
+                <i class="fa-solid fa-trash"></i></button>
+            </div>
+          </div>
+        `;
+        list.appendChild(card);
+      } catch(e) {
+        console.error('Library card render error:', item.title, e);
+      }
+    });
+  }
+
+  function confirmLibDelete(path, title) {
+    confirmingLibPath = path;
+    
+    // Find the exact card matching our raw file path
+    const cards = document.querySelectorAll('.library-card');
+    let targetCard = null;
+    
+    for (let i = 0; i < cards.length; i++) {
+      if (cards[i].dataset.libpath === path) {
+        targetCard = cards[i];
+        break;
+      }
+    }
+
+    if (!targetCard) return;
+    
+    const actions = targetCard.querySelector('.card-actions');
+    if (!actions) return;
+
+    actions.innerHTML = `
+      <span style="font-size:12px;color:var(--muted);margin-right:6px;">Delete?</span>
+      <button class="btn-icon success" onclick="deleteLibItem('${escHtml(escJs(path))}')" title="Yes">&#10003;</button>
+      <button class="btn-icon" onclick="cancelLibDelete('${escHtml(escJs(path))}')" title="No">&#10005;</button>
+    `;
+  }
+
+  function cancelLibDelete(path) {
+    confirmingLibPath = null;
+    loadLibrary();
+  }
+
+  async function deleteLibItem(path) {
+    confirmingLibPath = null;
+    const res = await fetch('/api/library/delete', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path}),
+    });
+    if (!res.ok) {
+      const d = await res.json();
+      showError(d.error || 'Could not delete file.');
+      return;
+    }
+    loadLibrary();
   }
 
   // Start polling

@@ -197,6 +197,109 @@ def api_delete():
     print(f'[Article2Pod] Removed from queue: {item.get("title", slug)}')
     return jsonify({'ok': True})
 
+@app.route('/api/library', methods=['GET'])
+def api_library():
+    """Return all MP3s from output folder, excluding done queue items."""
+    from utils import get_output_dir
+    import glob
+
+    # Get slugs of done queue items to exclude
+    queue      = load_queue()
+    done_slugs = {i['slug'] for i in queue if i['status'] == 'done'}
+
+    # Scan output folder
+    output_dir = get_output_dir()
+    mp3s       = glob.glob(os.path.join(output_dir, '**', '*.mp3'), recursive=True)
+    mp3s.sort(key=os.path.getmtime, reverse=True)
+
+    items = []
+    for mp3_path in mp3s:
+        try:
+            from mutagen.id3 import ID3
+            tags   = ID3(mp3_path)
+            title  = str(tags.get('TIT2', os.path.basename(mp3_path)))
+            site   = str(tags.get('TPE1', ''))
+            author = str(tags.get('TALB', ''))
+
+            skip = False
+            for slug in done_slugs:
+                item = get_queue_item(slug)
+                if item and item.get('title', '').lower() == title.lower():
+                    skip = True
+                    break
+            if skip:
+                continue
+
+            art_b64 = None
+            apic_tags = tags.getall('APIC')
+            if apic_tags:
+                art_b64 = 'data:image/jpeg;base64,' + \
+                    base64.b64encode(apic_tags[0].data).decode('utf-8')
+
+            rel_path = os.path.relpath(mp3_path, output_dir)
+            items.append({
+                'path':   rel_path,
+                'title':  title,
+                'site':   site,
+                'author': author,
+                'art_b64': art_b64,
+            })
+        except Exception as e:
+            print(f'  [Library] Skipped {os.path.basename(mp3_path)}: {e}')
+            continue
+
+    return jsonify({'items': items, 'total': len(items)})
+
+@app.route('/api/library/download', methods=['GET'])
+def api_library_download():
+    from utils import get_output_dir
+    rel_path   = request.args.get('path')
+    if not rel_path:
+        return jsonify({'error': 'No path provided.'}), 400
+    output_dir = get_output_dir()
+    mp3_path   = os.path.normpath(os.path.join(output_dir, rel_path))
+    if not mp3_path.startswith(os.path.normpath(output_dir)):
+        return jsonify({'error': 'Invalid path.'}), 400
+    if not os.path.isfile(mp3_path):
+        return jsonify({'error': 'File not found.'}), 404
+    filename = os.path.basename(mp3_path)
+    return send_file(mp3_path, mimetype='audio/mpeg',
+                     as_attachment=True,
+                     download_name=filename)
+
+@app.route('/api/library/delete', methods=['POST'])
+def api_library_delete():
+    """Delete an MP3 from the output folder by relative path."""
+    from utils import get_output_dir
+    rel_path   = request.json.get('path')
+    if not rel_path:
+        return jsonify({'error': 'No path provided.'}), 400
+
+    output_dir = get_output_dir()
+    mp3_path   = os.path.normpath(os.path.join(output_dir, rel_path))
+
+    # Security check — ensure path stays within output_dir
+    if not mp3_path.startswith(os.path.normpath(output_dir)):
+        return jsonify({'error': 'Invalid path.'}), 400
+
+    if not os.path.isfile(mp3_path):
+        return jsonify({'error': 'File not found.'}), 404
+
+    os.remove(mp3_path)
+    print(f'[Article2Pod] Library delete: {rel_path}')
+
+    # Clean up empty parent folders
+    for folder in [os.path.dirname(mp3_path),
+                   os.path.dirname(os.path.dirname(mp3_path))]:
+        if folder != output_dir:
+            try:
+                if os.path.isdir(folder) and not os.listdir(folder):
+                    os.rmdir(folder)
+            except Exception:
+                pass
+
+    return jsonify({'ok': True})
+
 # ============================================================
 # MAIN
 # ============================================================
