@@ -2,7 +2,7 @@
 
 Article2Pod converts web articles into podcast-style MP3 files. Enter a URL, and the pipeline scrapes the article text and metadata, generates audio using AI text-to-speech, embeds metadata into the MP3, and organizes the file into a destination folder structure.
 
-It is a PowerShell and Python pipeline that runs on Windows and uses [ComfyUI](https://www.comfy.org/) with the [VibeVoice-ComfyUI](https://github.com/Enemyx-net/VibeVoice-ComfyUI) nodes for audio generation.
+It is a Python pipeline that was built for use on Windows and leverages [ComfyUI](https://www.comfy.org/) with the [VibeVoice-ComfyUI](https://github.com/Enemyx-net/VibeVoice-ComfyUI) nodes for audio generation.
 
 Article2Pod was vibe coded using AI (primarily Anthropic's Claude model).
 
@@ -73,7 +73,6 @@ Copy `config.sample.json` to `config.json` and update the values for your system
 | `input_folder` | ComfyUI input folder where your temporary `article.txt` and your voice sample live. |
 | `audio_folder` | ComfyUI audio output folder where generated MP3s are written before tagging. |
 | `output_folder` | ComfyUI output folder root. |
-| `podcasts_folder` | Destination for finished tagged MP3s, organized as `[Site]/[Author]/slug.mp3`. |
 | `track_log` | Path to the track number log file, relative to the `article2pod` folder. |
 | `user_agent` | User agent string used for web requests. |
 | `ad_strip_markers` | List of text strings that trigger removal of everything after them in scraped articles. Useful for stripping site-specific promotional content. |
@@ -102,52 +101,14 @@ Sources for royalty-free voice samples:
 
 ## Usage
 
-Run `article2pod.ps1` directly or create a shortcut with:
-```
-powershell.exe -ExecutionPolicy Bypass -File "C:\ComfyUI\article2pod\article2pod.ps1"
-```
+Run `article2pod.bat` directly or launch `scripts\app.py`
 
-The pipeline will start ComfyUI in the background, then prompt you to enter URLs.
-
-- **Enter a URL** to scrape the article automatically
-- **Press Enter without a URL** to use clipboard/Reader Mode for paywalled or blocked sites:
-  1. Open the article in your browser
-  2. Switch to Reader Mode (`F9` in Firefox/Edge)
-  3. Select All (`Ctrl+A`) and Copy (`Ctrl+C`)
-  4. Return to the terminal and press Enter
-- After each article, choose whether to add another
-- When done, press `N` to begin batch audio generation
-
-Finished MP3s are delivered to your configured `podcasts_folder` organized as:
+Finished MP3s are delivered to the `output` organized as:
 ```
-podcasts_folder/
+output/
   [Site]/
     [Author]/
       article-slug.mp3
-```
-
----
-
-## Folder Structure
-```
-C:\ComfyUI\article2pod\
-  article2pod.ps1          ← main launcher
-  config.json              ← your configuration (not in repo)
-  config.sample.json       ← configuration template with comments
-  requirements.txt         ← Python dependencies
-  scripts/
-    fetch-article.py       ← article text scraper
-    fetch-metadata.py      ← metadata and album art fetcher
-    fetch-audio.py         ← direct audio downloader
-    generate-audio.py      ← ComfyUI API interface
-    tag-mp3.py             ← ID3 tagger and file mover
-    utils.py               ← shared utilities
-  workflow/
-    workflow-api.json          ← your workflow (not in repo)
-    workflow-api.sample.json   ← example workflow
-  temp/                    ← working files, cleared each run
-  log/
-    track-log.json         ← track number log, not in repo
 ```
 
 ---
