@@ -561,14 +561,130 @@
   .library-load-more:hover {
     background: var(--surface2);
   }
+
+  /* Settings panel */
+  .settings-panel {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 16px;
+    display: none;
+  }
+
+  .settings-panel.open {
+    display: block;
+  }
+
+  .settings-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .settings-label {
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+    font-weight: 600;
+  }
+
+  select {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 6px 10px;
+    outline: none;
+    flex: 1;
+    cursor: pointer;
+    transition: border-color 0.2s;
+  }
+
+  select:focus {
+    border-color: var(--accent);
+  }
+
+  .btn-save {
+    background: none;
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    color: var(--accent);
+    cursor: pointer;
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 700;
+    padding: 6px 14px;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+
+  .btn-save:hover {
+    background: rgba(74, 222, 128, 0.1);
+  }
+
+  .btn-gear {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0;
+    line-height: 1;
+    transition: color 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+  }
+
+  .btn-gear:hover {
+    color: var(--text);
+  }
+
+  .btn-gear.customized {
+    color: var(--accent);
+  }
+
+  /* Card voice panel */
+  .card-voice-panel {
+    border-top: 1px solid var(--border);
+    padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--surface2);
+  }
 </style>
 </head>
 <body>
 
 <header>
   <h1>Article2Pod</h1>
-  <div class="status-dot" id="statusDot"></div>
+  <div style="display:flex;align-items:center;gap:12px;">
+    <div class="status-dot" id="statusDot"></div>
+    <button class="btn-gear" id="headerGear"
+            onclick="toggleSettings()"
+            title="Settings"
+            style="width:32px;height:32px;font-size:16px;color:var(--muted);">
+      <i class="fa-solid fa-gear"></i>
+    </button>
+  </div>
 </header>
+
+<!-- Settings panel (below header, above main) -->
+<div class="settings-panel" id="settingsPanel">
+  <div class="settings-row">
+    <span class="settings-label">Default Voice</span>
+    <select id="defaultVoiceSelect" onchange="defaultVoiceChanged()">
+      <option value="">Loading...</option>
+    </select>
+    <button class="btn-save" id="saveDefaultVoice"
+            onclick="saveDefaultVoice()" disabled>Save</button>
+  </div>
+</div>
 
 <main>
   <!-- Input Section -->
@@ -647,6 +763,12 @@
   let libraryOffset  = 0;
   let libraryHasMore = false;
   let confirmingLibPath = null;
+  let settingsOpen    = false;
+  let voicesCache     = null;   // cached voice list
+  let voicePanelOpenCount = 0;
+  let defaultVoice    = '';     // current default from config
+  let pendingDefault  = '';     // staged but unsaved default change
+  const voicePanelOpen = {};    // slug -> bool
   // Track which cards have output panel open
   const outputOpen = {};
 
@@ -667,6 +789,132 @@
 
   function clearError() {
     document.getElementById('errorBanner').style.display = 'none';
+  }
+
+  async function loadVoices() {
+    if (voicesCache) return voicesCache;
+    try {
+      const res  = await fetch('/api/voices');
+      const data = await res.json();
+      voicesCache  = data.voices || [];
+      defaultVoice = data.default || '';
+      pendingDefault = defaultVoice;
+      return voicesCache;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  async function toggleSettings() {
+    settingsOpen = !settingsOpen;
+    const panel = document.getElementById('settingsPanel');
+    const gear  = document.getElementById('headerGear');
+    panel.classList.toggle('open', settingsOpen);
+    gear.style.color = settingsOpen ? 'var(--accent)' : 'var(--muted)';
+
+    if (settingsOpen) {
+      const voices = await loadVoices();
+      const sel    = document.getElementById('defaultVoiceSelect');
+      sel.innerHTML = voices.map(v =>
+        `<option value="${escHtml(v)}" ${v === defaultVoice ? 'selected' : ''}>${escHtml(v)}</option>`
+      ).join('');
+      document.getElementById('saveDefaultVoice').disabled = true;
+      pendingDefault = defaultVoice;
+    }
+  }
+
+  function defaultVoiceChanged() {
+    const sel = document.getElementById('defaultVoiceSelect');
+    pendingDefault = sel.value;
+    document.getElementById('saveDefaultVoice').disabled =
+      (pendingDefault === defaultVoice);
+  }
+
+  async function saveDefaultVoice() {
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({voice_file: pendingDefault}),
+    });
+    if (res.ok) {
+      defaultVoice = pendingDefault;
+      voicesCache  = null;  // force refresh next time
+      document.getElementById('saveDefaultVoice').disabled = true;
+      // Flash the button briefly
+      const btn = document.getElementById('saveDefaultVoice');
+      btn.textContent = 'Saved!';
+      setTimeout(() => { btn.textContent = 'Save'; }, 1500);
+    } else {
+      showError('Could not save default voice.');
+    }
+  }
+
+  async function populateVoiceSelect(selectId, currentVoice, show) {
+    const sel = document.getElementById(selectId);
+    if (!sel) return;
+
+    const voices = await loadVoices();
+    // First option: use default
+    const opts = [`<option value="">Default (${escHtml(defaultVoice)})</option>`];
+    voices.forEach(v => {
+      const selected = (v === currentVoice) ? 'selected' : '';
+      opts.push(`<option value="${escHtml(v)}" ${selected}>${escHtml(v)}</option>`);
+    });
+    sel.innerHTML = opts.join('');
+    if (currentVoice) sel.value = currentVoice;
+  }
+
+  async function toggleCardVoice(slug) {
+    voicePanelOpen[slug] = !voicePanelOpen[slug];
+
+    if (voicePanelOpen[slug]) {
+      voicePanelOpenCount++;
+    } else {
+      voicePanelOpenCount = Math.max(0, voicePanelOpenCount - 1);
+    }
+
+    const panel = document.getElementById(`voice-panel-${slug}`);
+    if (!panel) return;
+
+    panel.style.display = voicePanelOpen[slug] ? '' : 'none';
+
+    if (voicePanelOpen[slug]) {
+      await populateVoiceSelect(`voice-select-${slug}`, '');
+      // Get current voice from latest queue state
+      try {
+        const res   = await fetch('/api/queue');
+        const data  = await res.json();
+        const item  = (data.queue || []).find(i => i.slug === slug);
+        if (item) {
+          await populateVoiceSelect(`voice-select-${slug}`, item.voice || '');
+        }
+      } catch (e) {}
+    }
+  }
+
+  async function setCardVoice(slug, voice) {
+    try {
+      const res = await fetch('/api/queue/voice', {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({slug, voice}),
+      });
+      if (!res.ok) {
+        showError('Could not update voice.');
+        return;
+      }
+      // Update gear color based on whether voice differs from default
+      const gear = document.getElementById(`gear-${slug}`);
+      if (gear) {
+        if (voice && voice !== '') {
+          gear.classList.add('customized');
+        } else {
+          gear.classList.remove('customized');
+        }
+      }
+    } catch (e) {
+      showError('Could not update voice.');
+    }
   }
 
   async function addUrl() {
@@ -876,7 +1124,7 @@
 
   async function pollQueue() {
     // Don't poll while a delete confirmation is showing
-    if (confirmingSlug) {
+    if (confirmingSlug || voicePanelOpenCount > 0) {
       schedulePoll(1000);  // check again soon in case it clears
       return;
     }
@@ -936,65 +1184,113 @@
     if (ph) list.appendChild(ph);
 
     queue.forEach((item) => {
-      const card = document.createElement('div');
-      card.className    = `queue-card status-${item.status}`;
-      card.dataset.slug = item.slug;
+      try {
+        const card = document.createElement('div');
+        card.className    = `queue-card status-${item.status}`;
+        card.dataset.slug = item.slug;
 
-      const artHtml = item.album_art_b64
-        ? `<img class="card-art" src="${item.album_art_b64}" alt="">`
-        : `<div class="card-art-placeholder">&#9834;</div>`;
+        const artHtml = item.album_art_b64
+          ? `<img class="card-art" src="${item.album_art_b64}" alt="">`
+          : `<div class="card-art-placeholder">&#9834;</div>`;
 
-      let actionHtml = '';
-      if (item.status === 'processing') {
-        actionHtml = `<div class="spinner"></div>`;
-      } else if (item.status === 'done') {
-        actionHtml = `
-          <a class="btn-icon success"
-            href="/api/download/${item.slug}"
-            download
-            title="Download MP3">&#8595;</a>
-          <button class="btn-icon danger"
-            onclick="confirmDelete('${item.slug}', '${escHtml(escJs(item.title || item.slug))}')"
-            title="Delete MP3"
-            style="font-size:14px;"><i class="fa-solid fa-trash"></i></button>`;
-      } else if (item.status === 'failed') {
-        actionHtml = `<span style="color:var(--danger);font-size:18px;"
-          title="${escHtml(item.error || '')}">&#10005;</span>`;
-      } else if (item.status === 'pending') {
-        actionHtml = `<button class="btn-icon danger"
-          onclick="removeItem('${item.slug}')"
-          title="Remove"
-          style="font-size:22px;font-weight:700;line-height:1;padding-bottom:2px;">-</button>`;
-      }
+        // Gear is accent-colored if item has a custom voice set
+        const gearClass = item.voice ? 'btn-gear customized' : 'btn-gear';
 
-      const hasOutput    = item.fetch_output || item.error;
-      const outputToggle = hasOutput
-        ? `<button class="btn-output-toggle" id="output-btn-${item.slug}"
-             onclick="toggleOutput('${item.slug}')">
-             ${outputOpen[item.slug] ? 'hide output' : 'show output'}
-           </button>`
-        : '';
+        let actionHtml = '';
+        if (item.status === 'processing') {
+          actionHtml = `<div class="spinner"></div>`;
+        } else if (item.status === 'done') {
+          actionHtml = `
+            <a class="btn-icon success"
+              href="/api/download/${escHtml(item.slug)}"
+              download
+              title="Download MP3">&#8595;</a>
+            <button class="btn-icon danger"
+              onclick="confirmDelete('${escHtml(escJs(item.slug))}', '${escHtml(escJs(item.title || item.slug))}')"
+              title="Delete MP3"
+              style="font-size:14px;"><i class="fa-solid fa-trash"></i></button>`;
+        } else if (item.status === 'failed') {
+          actionHtml = `<span style="color:var(--danger);font-size:18px;"
+            title="${escHtml(item.error || '')}">&#10005;</span>`;
+        } else if (item.status === 'pending') {
+          const showVoice = (item.pipeline_type === 'comfyui' || !item.pipeline_type);
+          const gearClass = item.voice ? 'btn-gear customized' : 'btn-gear';
 
-      card.innerHTML = `
-        <div class="card-main">
-          ${artHtml}
-          <div class="card-info">
-            <div class="card-title">${escHtml(item.title || item.slug)}</div>
-            <div class="card-meta">
-              ${escHtml(item.album || '')}${item.album && item.artist ? ' &middot; ' : ''}${escHtml(item.artist || '')}
+          actionHtml = `
+            ${showVoice ? `
+            <button class="${gearClass}"
+              onclick="toggleCardVoice('${escHtml(escJs(item.slug))}')"
+              title="Voice settings"
+              id="gear-${escHtml(item.slug)}">
+              <i class="fa-solid fa-gear"></i></button>` : ''}
+            <button class="btn-icon danger"
+              onclick="removeItem('${escHtml(escJs(item.slug))}')"
+              title="Remove"
+              style="font-size:22px;font-weight:700;line-height:1;padding-bottom:2px;">-</button>`;
+        }
+
+        const hasOutput    = item.fetch_output || item.error;
+        const outputToggle = hasOutput
+          ? `<button class="btn-output-toggle" id="output-btn-${escHtml(item.slug)}"
+               onclick="toggleOutput('${escHtml(escJs(item.slug))}')">
+               ${outputOpen[item.slug] ? 'hide output' : 'show output'}
+             </button>`
+          : '';
+
+        // Voice panel — only for pending items
+        const voicePanel = (item.status === 'pending' &&
+                           (item.pipeline_type === 'comfyui' || !item.pipeline_type)) ? `
+          <div class="card-voice-panel"
+               id="voice-panel-${escHtml(item.slug)}"
+               style="display:none;">
+            <span class="settings-label" style="white-space:nowrap;">
+              <i class="fa-solid fa-microphone" style="margin-right:4px;"></i>Voice
+            </span>
+            <select id="voice-select-${escHtml(item.slug)}"
+                    onchange="setCardVoice('${escHtml(escJs(item.slug))}', this.value)">
+              <option value="">Loading...</option>
+            </select>
+          </div>` : '';
+
+        card.innerHTML = `
+          <div class="card-main">
+            ${artHtml}
+            <div class="card-info">
+              <div class="card-title">${escHtml(item.title || item.slug)}</div>
+              <div class="card-meta">
+                ${escHtml(item.album || '')}${item.album && item.artist ? ' &middot; ' : ''}${escHtml(item.artist || '')}
+              </div>
+              ${outputToggle ? `<div style="margin-top:4px">${outputToggle}</div>` : ''}
             </div>
-            ${outputToggle ? `<div style="margin-top:4px">${outputToggle}</div>` : ''}
+            <div class="card-actions">${actionHtml}</div>
           </div>
-          <div class="card-actions">${actionHtml}</div>
-        </div>
-        ${item.error ? `<div class="card-error">${escHtml(item.error)}</div>` : ''}
-        ${item.fetch_output ? `
-          <div class="card-output ${outputOpen[item.slug] ? 'open' : ''}" id="output-${item.slug}">
-            <div class="card-output-inner">${escHtml(item.fetch_output)}</div>
-          </div>` : ''}
-      `;
+          ${item.error ? `<div class="card-error">${escHtml(item.error)}</div>` : ''}
+          ${item.fetch_output ? `
+            <div class="card-output ${outputOpen[item.slug] ? 'open' : ''}"
+                 id="output-${escHtml(item.slug)}">
+              <div class="card-output-inner">${escHtml(item.fetch_output)}</div>
+            </div>` : ''}
+          ${voicePanel}
+        `;
 
-      list.appendChild(card);
+        list.appendChild(card);
+
+        // Populate voice dropdown after card is in DOM
+        if (item.status === 'pending') {
+          const panelVisible = voicePanelOpen[item.slug] || false;
+          const panel = document.getElementById(`voice-panel-${item.slug}`);
+          if (panel && panelVisible) {
+            panel.style.display = '';
+            populateVoiceSelect(
+              `voice-select-${item.slug}`,
+              item.voice || ''
+            );
+          }
+        }
+
+      } catch (e) {
+        console.error('Queue card render error:', item.slug, e);
+      }
     });
   }
 

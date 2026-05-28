@@ -15,21 +15,38 @@ AUDIO_FOLDER  = get_audio_folder()
 TEMP_FOLDER   = get_temp_folder()
 OUTPUT_PREFIX = get_audio_output_prefix()
 
-def get_voice_file():
+def get_voice_file(override=None):
+    from utils import get_voice_folder
+    voice_folder = get_voice_folder()
+    input_folder = get_input_folder()
+
+    # Use override if provided
+    if override:
+        # Check voice folder first, then input folder
+        for folder in [voice_folder, input_folder]:
+            full_path = os.path.join(folder, override)
+            if os.path.isfile(full_path):
+                return override, full_path
+        print(f'  Voice override not found: {override}, falling back to default.')
+
     config     = load_config()
     voice_file = config.get('voice_file')
     if voice_file:
-        full_path = os.path.join(INPUT_FOLDER, voice_file)
-        if not os.path.isfile(full_path):
-            print(f'Voice file from config not found: {full_path}')
-            sys.exit(1)
-        return voice_file
-    voices = glob.glob(os.path.join(INPUT_FOLDER, '*.mp3'))
-    if not voices:
-        print(f'No voice clone MP3 found in {INPUT_FOLDER}')
-        sys.exit(1)
-    print(f'  No voice_file in config, defaulting to: {os.path.basename(voices[0])}')
-    return os.path.basename(voices[0])
+        for folder in [voice_folder, input_folder]:
+            full_path = os.path.join(folder, voice_file)
+            if os.path.isfile(full_path):
+                return voice_file, full_path
+
+    # Fallback: first mp3 in voice folder, then input folder
+    for folder in [voice_folder, input_folder]:
+        voices = glob.glob(os.path.join(folder, '*.mp3'))
+        if voices:
+            name = os.path.basename(voices[0])
+            print(f'  No voice_file in config, defaulting to: {name}')
+            return name, voices[0]
+
+    print(f'No voice clone MP3 found in {voice_folder} or {input_folder}')
+    sys.exit(1)
 
 def load_workflow():
     with open(WORKFLOW_FILE, 'r', encoding='utf-8') as f:
@@ -43,7 +60,7 @@ def get_article_txt_from_workflow():
 
 ARTICLE_TXT = get_article_txt_from_workflow()
 
-def patch_workflow(workflow, voice_file):
+def patch_workflow(workflow, voice_file, voice_full_path):
     for node_id, node in workflow.items():
         ct = node.get('class_type', '')
         if ct == 'LoadAudio':
@@ -103,11 +120,20 @@ def rename_output(slug):
     print(f'  Renamed:  {os.path.basename(files[0])} -> {slug}.mp3')
     return dest
 
-def main(slug):
-    voice_file = get_voice_file()
+def main(slug, voice_override=None):
+    voice_file, voice_full_path = get_voice_file(voice_override)
     print(f'  Slug:     {slug}')
+    print(f'  Voice:    {voice_file}')
+
+    # Copy voice file to ComfyUI input folder if not already there
+    input_dest = os.path.join(INPUT_FOLDER, voice_file)
+    if not os.path.isfile(input_dest):
+        import shutil
+        shutil.copy2(voice_full_path, input_dest)
+        print(f'  Copied voice to input folder.')
+
     workflow  = load_workflow()
-    workflow  = patch_workflow(workflow, voice_file)
+    workflow  = patch_workflow(workflow, voice_file, voice_full_path)
     prompt_id = submit_workflow(workflow)
     if not prompt_id:
         print('Failed to get prompt_id from ComfyUI.')
@@ -117,7 +143,9 @@ def main(slug):
     rename_output(slug)
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print('Usage: python generate-audio.py <slug>')
-        sys.exit(1)
-    main(sys.argv[1])
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('slug')
+    parser.add_argument('--voice', default=None)
+    args = parser.parse_args()
+    main(args.slug, args.voice)

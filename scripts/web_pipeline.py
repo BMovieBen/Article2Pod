@@ -198,16 +198,24 @@ def finish_add(slug, url, mode, fetch_output):
         with open(art, 'rb') as f:
             art_b64 = 'data:image/jpeg;base64,' + base64.b64encode(f.read()).decode('utf-8')
 
+    if os.path.isfile(os.path.join(temp, f'youtube-handoff-{slug}.json')):
+        pipeline_type = 'youtube'
+    elif os.path.isfile(os.path.join(temp, f'audio-handoff-{slug}.json')):
+        pipeline_type = 'audio'
+    else:
+        pipeline_type = 'comfyui'
+
     item = {
-        'slug':       slug,
-        'status':     'pending',
-        'title':      meta.get('title', slug),
-        'artist':     meta.get('artist', ''),
-        'album':      meta.get('album', ''),
-        'album_art':  meta.get('album_art'),
-        'source_url': url,
-        'error':      None,
-        'added_at':   time.time(),
+        'slug':          slug,
+        'status':        'pending',
+        'title':         meta.get('title', slug),
+        'artist':        meta.get('artist', ''),
+        'album':         meta.get('album', ''),
+        'album_art':     meta.get('album_art'),
+        'source_url':    url,
+        'error':         None,
+        'added_at':      time.time(),
+        'pipeline_type': pipeline_type,
     }
 
     with queue_lock:

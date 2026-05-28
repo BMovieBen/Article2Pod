@@ -300,6 +300,67 @@ def api_library_delete():
 
     return jsonify({'ok': True})
 
+@app.route('/api/voices', methods=['GET'])
+def api_voices():
+    """Return list of available voice sample MP3s."""
+    import glob
+    from utils import get_voice_folder, get_input_folder, load_config
+    voice_folder = get_voice_folder()
+    input_folder = get_input_folder()
+    default      = load_config().get('voice_file', '')
+
+    # Scan both folders, deduplicate by filename
+    seen  = set()
+    names = []
+    for folder in [voice_folder, input_folder]:
+        for f in glob.glob(os.path.join(folder, '*.mp3')):
+            name = os.path.basename(f)
+            if name not in seen:
+                seen.add(name)
+                names.append(name)
+
+    names.sort()
+    return jsonify({'voices': names, 'default': default})
+
+@app.route('/api/settings', methods=['POST'])
+def api_settings():
+    """Save default voice to config.json."""
+    data  = request.json
+    voice = data.get('voice_file', '').strip()
+    if not voice:
+        return jsonify({'error': 'No voice specified.'}), 400
+
+    # Read, update, write config
+    config_path = os.path.join(APP_DIR, 'config.json')
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = json.load(f)
+    config['voice_file'] = voice
+    with open(config_path, 'w', encoding='utf-8') as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+
+    print(f'[Article2Pod] Default voice set to: {voice}')
+    return jsonify({'ok': True})
+
+@app.route('/api/queue/voice', methods=['PATCH'])
+def api_queue_voice():
+    """Set per-item voice override on a queue item."""
+    data  = request.json
+    slug  = data.get('slug', '').strip()
+    voice = data.get('voice', '').strip()  # empty string = use default
+    if not slug:
+        return jsonify({'error': 'No slug specified.'}), 400
+
+    with queue_lock:
+        q    = load_queue()
+        item = next((i for i in q if i['slug'] == slug), None)
+        if not item:
+            return jsonify({'error': 'Item not found.'}), 404
+        item['voice'] = voice if voice else None
+        save_queue(q)
+
+    print(f'[Article2Pod] Voice for {slug} set to: {voice or "default"}')
+    return jsonify({'ok': True})
+
 # ============================================================
 # MAIN
 # ============================================================

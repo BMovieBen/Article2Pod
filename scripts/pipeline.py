@@ -110,7 +110,17 @@ def process_single(slug):
         if not os.path.isfile(slug_txt):
             return False, f'Article text file not found for slug: {slug}'
         shutil.copy2(slug_txt, article_txt)
-        ok, out, _ = run_script('generate-audio.py', slug)
+
+        # Get voice override for this slug from queue
+        from queue_manager import load_queue
+        queue = load_queue()
+        item  = next((i for i in queue if i['slug'] == slug), None)
+        voice = item.get('voice') if item else None
+
+        gen_args = ['generate-audio.py', slug]
+        if voice:
+            gen_args += ['--voice', voice]
+        ok, out, _ = run_script(*gen_args)
         if not ok:
             return False, f'generate-audio failed:\n{out}'
 

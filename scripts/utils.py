@@ -27,6 +27,10 @@ def get_input_folder():    return get_required('input_folder')
 def get_audio_folder():    return get_required('audio_folder')
 def get_temp_folder():     return os.path.join(APP_DIR, 'temp')
 def get_output_folder():   return get_required('output_folder')
+def get_voice_folder():
+    folder = load_config().get('voice_folder', os.path.join(APP_DIR, 'voices'))
+    os.makedirs(folder, exist_ok=True)
+    return folder
 def get_comfy_url():       return get_required('comfy_url')
 def get_workflow_file():
     return os.path.join(APP_DIR, get_required('workflow_file'))
