@@ -79,6 +79,13 @@ def api_add():
     if not url and not text:
         return jsonify({'error': 'No URL or text provided.'}), 400
 
+    # URL mode — basic validation
+    if mode == 'url' and url:
+        if not url.startswith('http://') and not url.startswith('https://'):
+            return jsonify({
+                'error': 'Please enter a valid URL. To add plain text, use Text mode.',
+            }), 400
+
     # Check blocked domains immediately without subprocess
     if mode == 'url' and is_clipboard_domain(url):
         return jsonify({

@@ -918,9 +918,24 @@
     }
   }
 
+  function isValidUrl(str) {
+    try {
+      const url = new URL(str);
+      return url.protocol === 'http:' || url.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }
+
   async function addUrl() {
     const url = document.getElementById('urlInput').value.trim();
     if (!url) return;
+
+    if (!isValidUrl(url)) {
+      showError('That doesn\'t look like a URL. Did you mean to use Text mode?');
+      return;
+    }
+    
     clearError();
     setAdding(true);
 
@@ -1059,14 +1074,33 @@
     }
   }
 
-  async function startGenerate() {
+async function startGenerate() {
+    // Close any open voice panels so polling resumes
+    Object.keys(voicePanelOpen).forEach(slug => {
+      if (voicePanelOpen[slug]) {
+        voicePanelOpen[slug] = false;
+        const panel = document.getElementById(`voice-panel-${slug}`);
+        if (panel) panel.style.display = 'none';
+      }
+    });
+    voicePanelOpenCount = 0;
+
+    // Switch button to Stop immediately — don't wait for poll
+    const btn = document.getElementById('generateBtn');
+    btn.textContent = 'Stop';
+    btn.classList.add('stop');
+    btn.disabled = false;
+
     const res  = await fetch('/api/generate', {method: 'POST'});
     const data = await res.json();
     if (!res.ok) {
+      // Revert button if it failed
+      btn.textContent = 'Generate';
+      btn.classList.remove('stop');
       showError(data.error || 'Could not start generation.');
       return;
     }
-    // Switch to fast polling immediately
+
     schedulePoll(0);
   }
 
