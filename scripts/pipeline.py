@@ -80,7 +80,14 @@ def run_script(script_name, *args):
     cmd         = ['python', os.path.join(scripts_dir, script_name)] + list(args)
     result      = subprocess.run(cmd, capture_output=True, text=True,
                                  encoding='utf-8', errors='replace')
-    return result.returncode == 0, result.stdout + result.stderr, result.returncode
+    # Filter out spinner lines from output
+    filtered = '\n'.join(
+        line for line in (result.stdout + result.stderr).splitlines()
+        if not any(line.strip().startswith(s) for s in
+                   ['- Generating', '\\ Generating', '| Generating', '/ Generating',
+                    'Complete!', 'Timed out'])
+    )
+    return result.returncode == 0, filtered, result.returncode
 
 def process_single(slug):
     temp      = get_temp_folder()

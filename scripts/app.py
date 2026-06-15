@@ -150,6 +150,25 @@ def api_stop():
     request_stop()
     return jsonify({'ok': True})
 
+@app.route('/api/retry', methods=['POST'])
+def api_retry():
+    """Reset a failed item back to pending so it gets reprocessed."""
+    slug = request.json.get('slug')
+    if not slug:
+        return jsonify({'error': 'No slug provided.'}), 400
+    with queue_lock:
+        q    = load_queue()
+        item = next((i for i in q if i['slug'] == slug), None)
+        if not item:
+            return jsonify({'error': 'Item not found.'}), 404
+        if item['status'] != 'failed':
+            return jsonify({'error': 'Item is not in failed state.'}), 400
+        item['status'] = 'pending'
+        item['error']  = None
+        save_queue(q)
+    print(f'[Article2Pod] Retrying: {item.get("title", slug)}')
+    return jsonify({'ok': True})
+
 @app.route('/api/download/<slug>')
 def api_download(slug):
     item  = get_queue_item(slug)

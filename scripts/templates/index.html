@@ -1037,10 +1037,22 @@
       return;
     }
 
+    // Success — remove placeholder, close any open voice panels, poll immediately
     if (ph) ph.remove();
     activeFetchId = null;
+
+    // Close any open voice panels so polling isn't blocked
+    Object.keys(voicePanelOpen).forEach(slug => {
+      if (voicePanelOpen[slug]) {
+        voicePanelOpen[slug] = false;
+        const panel = document.getElementById(`voice-panel-${slug}`);
+        if (panel) panel.style.display = 'none';
+      }
+    });
+    voicePanelOpenCount = 0;
+
     if (onSuccess) onSuccess();
-    pollQueue();  // immediately render the new item
+    pollQueue();
   }
 
   function setAdding(adding) {
@@ -1135,6 +1147,20 @@ async function startGenerate() {
       const d = await res.json();
       showError(d.error || 'Could not open file.');
     }
+  }
+
+  async function retryItem(slug) {
+    const res = await fetch('/api/retry', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({slug}),
+    });
+    if (!res.ok) {
+      const d = await res.json();
+      showError(d.error || 'Could not retry item.');
+      return;
+    }
+    schedulePoll(0);
   }
 
   function toggleOutput(slug) {
@@ -1245,8 +1271,13 @@ async function startGenerate() {
               title="Delete MP3"
               style="font-size:14px;"><i class="fa-solid fa-trash"></i></button>`;
         } else if (item.status === 'failed') {
-          actionHtml = `<span style="color:var(--danger);font-size:18px;"
-            title="${escHtml(item.error || '')}">&#10005;</span>`;
+          actionHtml = `
+            <button class="btn-icon"
+              onclick="retryItem('${escHtml(escJs(item.slug))}')"
+              title="Retry"
+              style="font-size:13px;color:var(--accent);">&#8635;</button>
+            <span style="color:var(--danger);font-size:18px;"
+              title="${escHtml(item.error || '')}">&#10005;</span>`;
         } else if (item.status === 'pending') {
           const showVoice = (item.pipeline_type === 'comfyui' || !item.pipeline_type);
           const gearClass = item.voice ? 'btn-gear customized' : 'btn-gear';

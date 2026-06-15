@@ -85,8 +85,7 @@ def wait_for_completion(prompt_id, timeout=3600):
     print(f'  Generating audio...')
     elapsed  = 0
     interval = 5
-    spinner  = ['-', '\\', '|', '/']
-    spin_idx = 0
+
     while elapsed < timeout:
         time.sleep(interval)
         elapsed += interval
@@ -96,17 +95,15 @@ def wait_for_completion(prompt_id, timeout=3600):
             if prompt_id in history:
                 status = history[prompt_id].get('status', {})
                 if status.get('completed'):
-                    print(f'\r  Complete! ({elapsed}s)              ')
+                    print(f'  Complete! ({elapsed}s)')
                     return True
                 if status.get('status_str') == 'error':
-                    print(f'\r  Error reported by ComfyUI.')
+                    print(f'  Error reported by ComfyUI.')
                     return False
         except Exception:
             pass
-        spin = spinner[spin_idx % len(spinner)]
-        spin_idx += 1
-        print(f'\r  {spin} Generating... ({elapsed}s)', end='', flush=True)
-    print(f'\r  Timed out after {timeout}s')
+
+    print(f'  Timed out after {timeout}s')
     return False
 
 def rename_output(slug):
