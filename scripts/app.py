@@ -346,7 +346,7 @@ def api_voices():
                 names.append(name)
 
     names.sort()
-    return jsonify({'voices': names, 'default': default})
+    return jsonify({'voices': ['shuffle'] + names, 'default': default})
 
 @app.route('/api/settings', methods=['POST'])
 def api_settings():

@@ -840,7 +840,7 @@
       const voices = await loadVoices();
       const sel    = document.getElementById('defaultVoiceSelect');
       sel.innerHTML = voices.map(v =>
-        `<option value="${escHtml(v)}" ${v === defaultVoice ? 'selected' : ''}>${escHtml(v)}</option>`
+        `<option value="${escHtml(v)}" ${v === defaultVoice ? 'selected' : ''}>${v === 'shuffle' ? '🎲 Shuffle' : escHtml(v)}</option>`
       ).join('');
       document.getElementById('saveDefaultVoice').disabled = true;
       pendingDefault = defaultVoice;
@@ -879,10 +879,11 @@
 
     const voices = await loadVoices();
     // First option: use default
-    const opts = [`<option value="">Default (${escHtml(defaultVoice)})</option>`];
+    const opts = [`<option value="">Default (${escHtml(defaultVoice === 'shuffle' ? '🎲 Shuffle' : defaultVoice)})</option>`];
     voices.forEach(v => {
       const selected = (v === currentVoice) ? 'selected' : '';
-      opts.push(`<option value="${escHtml(v)}" ${selected}>${escHtml(v)}</option>`);
+      const label    = v === 'shuffle' ? '🎲 Shuffle' : v;
+      opts.push(`<option value="${escHtml(v)}" ${selected}>${escHtml(label)}</option>`);
     });
     sel.innerHTML = opts.join('');
     if (currentVoice) sel.value = currentVoice;
