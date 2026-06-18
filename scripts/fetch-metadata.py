@@ -38,7 +38,7 @@ def fetch_and_resize_image(img_url, size=(500, 500)):
     try:
         r = requests.get(img_url, headers=IMAGE_HEADERS, timeout=10)
         if r.status_code != 200:
-            print(f'  [Debug] HTTP {r.status_code}: blocked or not found for {img_url}')
+            print(f'  HTTP {r.status_code}: blocked or not found for {img_url}')
             return None
         img = Image.open(BytesIO(r.content)).convert('RGB')
         target_w, target_h = size
@@ -51,13 +51,13 @@ def fetch_and_resize_image(img_url, size=(500, 500)):
         top  = (scaled_h - target_h) // 2
         return img.crop((left, top, left + target_w, top + target_h))
     except Exception as e:
-        print(f'  [Debug] Fetch error: {e}')
+        print(f'  Fetch error: {e}')
         return None
 
 def search_image(query):
     """Search DuckDuckGo images — single attempt, fail fast."""
     clean_query = ' '.join(query.split()[:5])  # first 5 words only
-    print(f'  [Debug] Searching DDG for: \'{clean_query}\'')
+    print(f'  Searching DDG for: \'{clean_query}\'')
     try:
         with DDGS() as ddgs:
             results = list(ddgs.images(clean_query, max_results=5))
@@ -67,7 +67,7 @@ def search_image(query):
                 if img:
                     return img
     except Exception as e:
-        print(f'  [Debug] DDG search error: {e}')
+        print(f'  DDG search error: {e}')
     return None
 
 def get_article_image(url, soup, title='', site_hint=''):
