@@ -567,18 +567,26 @@
   .settings-panel {
     background: var(--surface);
     border-bottom: 1px solid var(--border);
-    padding: 14px 16px;
+    padding: 14px 20px;
     display: none;
+    overflow: hidden;
   }
 
-  .settings-panel.open {
-    display: block;
+  .settings-panel .settings-row {
+    max-width: 560px;
+    margin: 0 auto;
   }
 
   .settings-row {
     display: flex;
     align-items: center;
     gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .settings-row select {
+    min-width: 0;
+    flex: 1 1 140px;
   }
 
   .settings-label {
@@ -726,11 +734,13 @@
   </div>
 
 <!-- Queue -->
-  <div class="queue-header">Queue</div>
-  <div id="queueList"></div>
-  <div class="queue-empty" id="queueEmpty">No articles queued yet.</div>
+  <div id="queueSection" style="display:none;">
+    <div class="queue-header">Queue</div>
+    <div id="queueList"></div>
+    <div class="queue-empty" id="queueEmpty" style="display:none;">No articles queued yet.</div>
+  </div>
 <!-- Library accordion -->
-  <div class="library-accordion" id="libraryAccordion">
+  <div class="library-accordion" id="libraryAccordion" style="display:none;">
     <button class="library-header" onclick="toggleLibrary()" id="libraryHeader">
       <span>Library</span>
       <span id="libraryCount" style="color:var(--muted);font-size:12px;font-weight:400;"></span>
@@ -792,6 +802,19 @@
     document.getElementById('errorBanner').style.display = 'none';
   }
 
+  async function initLibrary() {
+    try {
+      const res  = await fetch('/api/library');
+      const data = await res.json();
+      const accordion = document.getElementById('libraryAccordion');
+      accordion.style.display = data.total > 0 ? '' : 'none';
+      if (data.total > 0) {
+        document.getElementById('libraryCount').textContent =
+          `(${data.total} podcast${data.total !== 1 ? 's' : ''})`;
+      }
+    } catch (e) {}
+  }
+
   async function loadVoices() {
     if (voicesCache) return voicesCache;
     try {
@@ -810,7 +833,7 @@
     settingsOpen = !settingsOpen;
     const panel = document.getElementById('settingsPanel');
     const gear  = document.getElementById('headerGear');
-    panel.classList.toggle('open', settingsOpen);
+    panel.style.display = settingsOpen ? 'block' : 'none';
     gear.style.color = settingsOpen ? 'var(--accent)' : 'var(--muted)';
 
     if (settingsOpen) {
@@ -1224,7 +1247,13 @@ async function startGenerate() {
 
     // Refresh library count if open
     if (libraryOpen) {
-      fetch(`/api/library?offset=0&limit=0`).then(r => r.json()).then(data => {
+      fetch('/api/library').then(r => r.json()).then(data => {
+        const accordion = document.getElementById('libraryAccordion');
+        if (data.total === 0) {
+          accordion.style.display = 'none';
+          return;
+        }
+        accordion.style.display = '';
         document.getElementById('libraryCount').textContent =
           `(${data.total} podcast${data.total !== 1 ? 's' : ''})`;
       }).catch(() => {});
@@ -1232,16 +1261,14 @@ async function startGenerate() {
   }
 
   function renderQueue(queue, processing) {
-    const list  = document.getElementById('queueList');
-    const empty = document.getElementById('queueEmpty');
-    const ph    = document.getElementById('adding-placeholder');
+    const list    = document.getElementById('queueList');
+    const section = document.getElementById('queueSection');
+    const ph      = document.getElementById('adding-placeholder');
 
-    // Show/hide empty message
-    const showEmpty = queue.length === 0 && !ph;
-    empty.style.display = showEmpty ? '' : 'none';
+    // Show queue section if there are items or a fetch is in progress
+    section.style.display = (queue.length > 0 || ph) ? '' : 'none';
 
     list.innerHTML = '';
-
     if (ph) list.appendChild(ph);
 
     queue.forEach((item) => {
@@ -1279,16 +1306,31 @@ async function startGenerate() {
             <span style="color:var(--danger);font-size:18px;"
               title="${escHtml(item.error || '')}">&#10005;</span>`;
         } else if (item.status === 'pending') {
-          const showVoice = (item.pipeline_type === 'comfyui' || !item.pipeline_type);
-          const gearClass = item.voice ? 'btn-gear customized' : 'btn-gear';
+          const pipelineType = item.pipeline_type || 'comfyui';
+          const gearClass    = item.voice ? 'btn-gear customized' : 'btn-gear';
+
+          let pipelineIcon = '';
+          if (pipelineType === 'comfyui') {
+            pipelineIcon = `
+              <button class="${gearClass}"
+                onclick="toggleCardVoice('${escHtml(escJs(item.slug))}')"
+                title="Voice settings"
+                id="gear-${escHtml(item.slug)}">
+                <i class="fa-solid fa-gear"></i></button>`;
+          } else if (pipelineType === 'audio') {
+            pipelineIcon = `
+              <span class="btn-gear" title="Embedded audio — will download directly"
+                style="cursor:default;color:var(--accent2);">
+                <i class="fa-solid fa-music"></i></span>`;
+          } else if (pipelineType === 'youtube') {
+            pipelineIcon = `
+              <span class="btn-gear" title="YouTube — will download directly"
+                style="cursor:default;color:#ff4444;">
+                <i class="fa-brands fa-youtube"></i></span>`;
+          }
 
           actionHtml = `
-            ${showVoice ? `
-            <button class="${gearClass}"
-              onclick="toggleCardVoice('${escHtml(escJs(item.slug))}')"
-              title="Voice settings"
-              id="gear-${escHtml(item.slug)}">
-              <i class="fa-solid fa-gear"></i></button>` : ''}
+            ${pipelineIcon}
             <button class="btn-icon danger"
               onclick="removeItem('${escHtml(escJs(item.slug))}')"
               title="Remove"
@@ -1415,6 +1457,13 @@ async function startGenerate() {
     const res  = await fetch('/api/library');
     const data = await res.json();
 
+    const accordion = document.getElementById('libraryAccordion');
+    if (data.total === 0) {
+      accordion.style.display = 'none';
+      return;
+    }
+    accordion.style.display = '';
+
     const list = document.getElementById('libraryList');
     list.innerHTML = '';
 
@@ -1431,7 +1480,6 @@ async function startGenerate() {
           ? `<img class="card-art" src="${item.art_b64}" alt="">`
           : `<div class="card-art-placeholder">&#9834;</div>`;
 
-        // Completely removed btoa(). Just generate a safe, random ID for the UI element.
         const safeId = Math.random().toString(36).substring(2, 10);
 
         card.innerHTML = `
@@ -1510,6 +1558,7 @@ async function startGenerate() {
 
   // Start polling
   schedulePoll(0);  // immediate first poll
+  initLibrary();
   pollQueue();
 </script>
 </body>

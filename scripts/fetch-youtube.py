@@ -61,6 +61,8 @@ def download_audio(url, slug):
     result = subprocess.run([
         'yt-dlp', '--no-playlist', '--extract-audio',
         '--audio-format', 'mp3', '--audio-quality', '0',
+        '--format', 'bestaudio/best',
+        '--postprocessor-args', 'ffmpeg:-q:a 0 -ac 2 -joint_stereo 1',
         '--output', dest, url
     ], capture_output=True, text=True)
     if result.returncode != 0:
