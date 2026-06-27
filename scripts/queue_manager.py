@@ -33,7 +33,7 @@ def delete_temp_files(slug):
     temp = get_temp_folder()
     for pattern in [f'{slug}.txt', f'{slug}.json', f'{slug}.jpg',
                     f'{slug}.mp3', f'audio-handoff-{slug}.json',
-                    f'youtube-handoff-{slug}.json']:
+                    f'youtube-handoff-{slug}.json', f'slug-handoff-{slug}.json']:
         path = os.path.join(temp, pattern)
         if os.path.isfile(path):
             try:
@@ -62,7 +62,7 @@ def cleanup_on_startup(log_level='off'):
                 base = f
                 for ext in ['.txt', '.json', '.jpg', '.mp3']:
                     base = base.replace(ext, '')
-                for prefix in ['audio-handoff-', 'youtube-handoff-']:
+                for prefix in ['audio-handoff-', 'youtube-handoff-', 'slug-handoff-']:
                     base = base.replace(prefix, '')
                 if base not in valid_slugs:
                     try:

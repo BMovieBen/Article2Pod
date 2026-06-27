@@ -9,10 +9,13 @@ from utils import (
 )
 from queue_manager import queue_lock, load_queue, save_queue, delete_temp_files
 
-processing     = False
-stop_requested = False
-comfy_process  = None
-current_slug   = None
+processing            = False
+stop_requested        = False
+comfy_process         = None
+current_slug          = None
+current_pipeline_type = None   # pipeline_type of the in-flight item, set by process_queue
+comfy_interrupt_error = None   # set if /interrupt fails, surfaced to the UI
+cancelled_by_user     = False  # set by request_stop() when it interrupts a comfyui job
 
 def is_comfyui_running():
     try:
@@ -74,6 +77,17 @@ def stop_comfyui():
         except subprocess.TimeoutExpired:
             comfy_process.kill()
     comfy_process = None
+
+def interrupt_comfyui():
+    """Cancel the in-flight ComfyUI prompt via the /interrupt endpoint.
+    Returns True on success, False if the request itself fails (network
+    error, ComfyUI unresponsive, etc). Does not fall back to killing the
+    process — that decision is left to the user."""
+    try:
+        r = requests.post(f'{get_comfy_url()}/interrupt', timeout=5)
+        return r.status_code == 200
+    except Exception:
+        return False
 
 def run_script(script_name, *args):
     scripts_dir = os.path.dirname(os.path.abspath(__file__))
@@ -138,7 +152,7 @@ def process_single(slug):
     return True, None
 
 def process_queue():
-    global processing, stop_requested, current_slug
+    global processing, stop_requested, current_slug, current_pipeline_type, comfy_interrupt_error, cancelled_by_user
     temp  = get_temp_folder()
     queue = load_queue()
 
@@ -166,8 +180,9 @@ def process_queue():
             q       = load_queue()
             pending = [i for i in q if i['status'] == 'pending']
             if pending:
-                pending[0]['status'] = 'processing'
-                current_slug         = pending[0]['slug']
+                pending[0]['status']  = 'processing'
+                current_slug          = pending[0]['slug']
+                current_pipeline_type = pending[0].get('pipeline_type', 'comfyui')
                 save_queue(q)
 
         print('[Article2Pod] Starting ComfyUI...')
@@ -179,8 +194,9 @@ def process_queue():
                         item['status'] = 'failed'
                         item['error']  = 'ComfyUI failed to start.'
                 save_queue(q)
-            processing   = False
-            current_slug = None
+            processing            = False
+            current_slug          = None
+            current_pipeline_type = None
             return
 
         print('[Article2Pod] ComfyUI ready.')
@@ -204,12 +220,22 @@ def process_queue():
                     item['status'] = 'processing'
                     save_queue(q)
 
-            slug         = item['slug']
-            current_slug = slug
+            slug = item['slug']
+            with queue_lock:
+                current_slug          = slug
+                current_pipeline_type = item.get('pipeline_type', 'comfyui')
+                comfy_interrupt_error = None
             print(f'[Article2Pod] Processing: {slug}')
 
             success, error = process_single(slug)
-            current_slug   = None
+            with queue_lock:
+                current_slug          = None
+                current_pipeline_type = None
+                was_cancelled         = cancelled_by_user
+                cancelled_by_user     = False
+
+            if not success and was_cancelled:
+                error = 'Cancelled by user.'
 
             with queue_lock:
                 q = load_queue()
@@ -234,9 +260,11 @@ def process_queue():
         if comfyui_started:
             stop_comfyui()
             print('[Article2Pod] ComfyUI shut down.')
-        processing     = False
-        stop_requested = False
-        current_slug   = None
+        processing            = False
+        stop_requested        = False
+        current_slug          = None
+        current_pipeline_type = None
+        cancelled_by_user     = False
         pending_remain = [i for i in load_queue() if i['status'] == 'pending']
         if pending_remain:
             print(f'[Article2Pod] {len(pending_remain)} article(s) remaining in queue.')
@@ -244,18 +272,43 @@ def process_queue():
             print('[Article2Pod] Queue complete.')
 
 def start_processing():
-    global processing, stop_requested
-    processing     = True
-    stop_requested = False
+    global processing, stop_requested, comfy_interrupt_error, cancelled_by_user
+    processing            = True
+    stop_requested        = False
+    comfy_interrupt_error = None
+    cancelled_by_user     = False
     threading.Thread(target=process_queue, daemon=True).start()
 
 def request_stop():
-    global stop_requested
+    """Stop the queue. If the in-flight item is a ComfyUI generation,
+    interrupt it immediately and shut ComfyUI down cleanly. Otherwise
+    (youtube/audio), let the current item finish before halting."""
+    global stop_requested, comfy_interrupt_error, cancelled_by_user
     stop_requested = True
+
+    with queue_lock:
+        slug          = current_slug
+        pipeline_type = current_pipeline_type
+
+    if slug and pipeline_type == 'comfyui':
+        print(f'[Article2Pod] Stop requested — interrupting ComfyUI ({slug})...')
+        if interrupt_comfyui():
+            cancelled_by_user = True
+            comfy_interrupt_error = None
+            print('[Article2Pod] ComfyUI interrupt sent.')
+        else:
+            comfy_interrupt_error = (
+                'Could not reach ComfyUI to cancel the current generation. '
+                'It may still be running — the queue will stop after it, '
+                'or you can close ComfyUI manually.'
+            )
+            print('[Article2Pod] ComfyUI interrupt failed.')
 
 def get_state():
     return {
-        'processing':     processing,
-        'stop_requested': stop_requested,
-        'current_slug':   current_slug,
+        'processing':            processing,
+        'stop_requested':        stop_requested,
+        'current_slug':          current_slug,
+        'current_pipeline_type': current_pipeline_type,
+        'comfy_interrupt_error': comfy_interrupt_error,
     }

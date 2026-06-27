@@ -38,7 +38,7 @@ def fetch_and_resize_image(img_url, size=(500, 500)):
     try:
         r = requests.get(img_url, headers=IMAGE_HEADERS, timeout=10)
         if r.status_code != 200:
-            print(f'  HTTP {r.status_code}: blocked or not found for {img_url}')
+            print(f'  [Debug] HTTP {r.status_code}: blocked or not found for {img_url}')
             return None
         img = Image.open(BytesIO(r.content)).convert('RGB')
         target_w, target_h = size
@@ -51,13 +51,13 @@ def fetch_and_resize_image(img_url, size=(500, 500)):
         top  = (scaled_h - target_h) // 2
         return img.crop((left, top, left + target_w, top + target_h))
     except Exception as e:
-        print(f'  Fetch error: {e}')
+        print(f'  [Debug] Fetch error: {e}')
         return None
 
 def search_image(query):
     """Search DuckDuckGo images — single attempt, fail fast."""
     clean_query = ' '.join(query.split()[:5])  # first 5 words only
-    print(f'  Searching DDG for: \'{clean_query}\'')
+    print(f'  [Debug] Searching DDG for: \'{clean_query}\'')
     try:
         with DDGS() as ddgs:
             results = list(ddgs.images(clean_query, max_results=5))
@@ -67,7 +67,7 @@ def search_image(query):
                 if img:
                     return img
     except Exception as e:
-        print(f'  DDG search error: {e}')
+        print(f'  [Debug] DDG search error: {e}')
     return None
 
 def get_article_image(url, soup, title='', site_hint=''):
@@ -214,6 +214,21 @@ def fetch_metadata(url):
             clipboard = json.load(f)
         os.remove(handoff_path)
 
+    # Slug handoff from fetch-article — reuse its resolved slug/title/author
+    # instead of re-deriving them from a second independent scrape, which can
+    # diverge (different slug) if the page changes between requests.
+    slug_handoff = {}
+    for hf in glob.glob(os.path.join(TEMP_FOLDER, 'slug-handoff-*.json')):
+        with open(hf, 'r', encoding='utf-8') as f:
+            hdata = json.load(f)
+        if hdata.get('source_url') == url:
+            slug_handoff = hdata
+            try:
+                os.remove(hf)
+            except Exception:
+                pass
+            break
+
     full_soup = BeautifulSoup('', 'html.parser')
 
     if clipboard.get('clipboard_title'):
@@ -225,10 +240,16 @@ def fetch_metadata(url):
         r         = requests.get(url, headers=PAGE_HEADERS, timeout=15)
         full_soup = BeautifulSoup(r.text, 'html.parser')
         doc       = Document(r.text)
-        title     = get_title(full_soup, doc)
-        slug      = safe_slug(title)
-        author    = get_author(full_soup)
         site_name = get_site_name(full_soup, url)
+
+        if slug_handoff.get('slug'):
+            slug   = slug_handoff['slug']
+            title  = slug_handoff.get('title') or get_title(full_soup, doc)
+            author = slug_handoff.get('author') or get_author(full_soup)
+        else:
+            title  = get_title(full_soup, doc)
+            slug   = safe_slug(title)
+            author = get_author(full_soup)
 
         audio_url = find_embedded_audio(full_soup, url)
         if audio_url:

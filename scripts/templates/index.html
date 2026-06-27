@@ -767,6 +767,7 @@
   let mode       = 'url';
   let isProcessing = false;
   let stopPending  = false;
+  let interruptErrorShown = false;  // guards against re-showing the same comfy interrupt error every poll
   let pollInterval    = 10000;  // default idle interval
   let pollTimer       = null;
   let confirmingSlug  = null;   // slug currently showing delete confirmation
@@ -840,7 +841,7 @@
       const voices = await loadVoices();
       const sel    = document.getElementById('defaultVoiceSelect');
       sel.innerHTML = voices.map(v =>
-        `<option value="${escHtml(v)}" ${v === defaultVoice ? 'selected' : ''}>${v === 'shuffle' ? '🎲 Shuffle' : escHtml(v)}</option>`
+        `<option value="${escHtml(v)}" ${v === defaultVoice ? 'selected' : ''}>${escHtml(v)}</option>`
       ).join('');
       document.getElementById('saveDefaultVoice').disabled = true;
       pendingDefault = defaultVoice;
@@ -879,11 +880,10 @@
 
     const voices = await loadVoices();
     // First option: use default
-    const opts = [`<option value="">Default (${escHtml(defaultVoice === 'shuffle' ? '🎲 Shuffle' : defaultVoice)})</option>`];
+    const opts = [`<option value="">Default (${escHtml(defaultVoice)})</option>`];
     voices.forEach(v => {
       const selected = (v === currentVoice) ? 'selected' : '';
-      const label    = v === 'shuffle' ? '🎲 Shuffle' : v;
-      opts.push(`<option value="${escHtml(v)}" ${selected}>${escHtml(label)}</option>`);
+      opts.push(`<option value="${escHtml(v)}" ${selected}>${escHtml(v)}</option>`);
     });
     sel.innerHTML = opts.join('');
     if (currentVoice) sel.value = currentVoice;
@@ -1143,7 +1143,11 @@ async function startGenerate() {
   async function stopQueue() {
     stopPending = true;
     document.getElementById('generateBtn').textContent = 'Stopping...';
-    await fetch('/api/stop', {method: 'POST'});
+    const res  = await fetch('/api/stop', {method: 'POST'});
+    const data = await res.json();
+    if (data.comfy_interrupt_error) {
+      showError(data.comfy_interrupt_error);
+    }
     schedulePoll(0);
   }
 
@@ -1220,6 +1224,13 @@ async function startGenerate() {
 
       isProcessing = data.processing;
       renderQueue(data.queue, data.processing);
+
+      if (data.comfy_interrupt_error && !interruptErrorShown) {
+        interruptErrorShown = true;
+        showError(data.comfy_interrupt_error);
+      } else if (!data.comfy_interrupt_error) {
+        interruptErrorShown = false;
+      }
 
       const dot = document.getElementById('statusDot');
       dot.classList.toggle('active', data.processing);

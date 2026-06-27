@@ -1,11 +1,11 @@
 # generate-audio.py
 
-import os, sys, json, time, glob, shutil
+import os, sys, json, time, glob, shutil, datetime
 import requests
 from utils import (
     load_config, get_comfy_url, get_workflow_file,
     get_input_folder, get_audio_folder, get_temp_folder,
-    get_audio_output_prefix
+    get_audio_output_prefix, APP_DIR
 )
 
 COMFY_URL     = get_comfy_url()
@@ -15,36 +15,10 @@ AUDIO_FOLDER  = get_audio_folder()
 TEMP_FOLDER   = get_temp_folder()
 OUTPUT_PREFIX = get_audio_output_prefix()
 
-def get_all_voices():
-    """Return list of (name, full_path) for all available voice MP3s."""
-    from utils import get_voice_folder
-    voice_folder = get_voice_folder()
-    input_folder = get_input_folder()
-    seen  = set()
-    found = []
-    for folder in [voice_folder, input_folder]:
-        for path in glob.glob(os.path.join(folder, '*.mp3')):
-            name = os.path.basename(path)
-            if name not in seen:
-                seen.add(name)
-                found.append((name, path))
-    return found
-
 def get_voice_file(override=None):
-    import random
     from utils import get_voice_folder
     voice_folder = get_voice_folder()
     input_folder = get_input_folder()
-
-    # Shuffle override: pick a random voice
-    if override == 'shuffle':
-        voices = get_all_voices()
-        if not voices:
-            print(f'  No voice MP3s found for shuffle.')
-            sys.exit(1)
-        name, path = random.choice(voices)
-        print(f'  Voice (shuffle): {name}')
-        return name, path
 
     # Use override if provided
     if override:
@@ -57,17 +31,6 @@ def get_voice_file(override=None):
 
     config     = load_config()
     voice_file = config.get('voice_file')
-
-    # Shuffle default: pick a random voice
-    if voice_file == 'shuffle':
-        voices = get_all_voices()
-        if not voices:
-            print(f'  No voice MP3s found for shuffle.')
-            sys.exit(1)
-        name, path = random.choice(voices)
-        print(f'  Voice (shuffle): {name}')
-        return name, path
-
     if voice_file:
         for folder in [voice_folder, input_folder]:
             full_path = os.path.join(folder, voice_file)
@@ -118,6 +81,34 @@ def submit_workflow(workflow):
     response.raise_for_status()
     return response.json().get('prompt_id')
 
+def log_comfyui_error(prompt_id, history_entry):
+    """Write ComfyUI error details to log/comfyui-errors.log."""
+    log_dir  = os.path.join(APP_DIR, 'log')
+    log_path = os.path.join(log_dir, 'comfyui-errors.log')
+    os.makedirs(log_dir, exist_ok=True)
+
+    lines = [
+        f'\n=== {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")} ===',
+        f'Prompt ID: {prompt_id}',
+    ]
+
+    status = history_entry.get('status', {})
+    msgs   = status.get('messages', [])
+    if msgs:
+        lines.append('Messages:')
+        for msg in msgs:
+            lines.append(f'  {msg}')
+
+    try:
+        lines.append(f'Full status:\n{json.dumps(status, indent=2)}')
+    except Exception:
+        pass
+
+    with open(log_path, 'a', encoding='utf-8') as f:
+        f.write('\n'.join(lines) + '\n')
+
+    print(f'  Error details logged to: {log_path}')
+
 def wait_for_completion(prompt_id, timeout=3600):
     print(f'  Generating audio...')
     elapsed  = 0
@@ -136,6 +127,7 @@ def wait_for_completion(prompt_id, timeout=3600):
                     return True
                 if status.get('status_str') == 'error':
                     print(f'  Error reported by ComfyUI.')
+                    log_comfyui_error(prompt_id, history[prompt_id])
                     return False
         except Exception:
             pass

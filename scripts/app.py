@@ -67,7 +67,11 @@ def api_queue():
             entry['album_art_b64'] = None
         entry['is_current'] = (item['slug'] == state['current_slug'])
         result.append(entry)
-    return jsonify({'queue': result, 'processing': state['processing']})
+    return jsonify({
+        'queue':                 result,
+        'processing':            state['processing'],
+        'comfy_interrupt_error': state['comfy_interrupt_error'],
+    })
 
 @app.route('/api/add', methods=['POST'])
 def api_add():
@@ -148,7 +152,11 @@ def api_generate():
 @app.route('/api/stop', methods=['POST'])
 def api_stop():
     request_stop()
-    return jsonify({'ok': True})
+    state = get_state()
+    return jsonify({
+        'ok':                   True,
+        'comfy_interrupt_error': state['comfy_interrupt_error'],
+    })
 
 @app.route('/api/retry', methods=['POST'])
 def api_retry():
@@ -346,7 +354,7 @@ def api_voices():
                 names.append(name)
 
     names.sort()
-    return jsonify({'voices': ['shuffle'] + names, 'default': default})
+    return jsonify({'voices': names, 'default': default})
 
 @app.route('/api/settings', methods=['POST'])
 def api_settings():

@@ -34,14 +34,10 @@ def _run_fetch_background(fetch_id, url, mode, text=''):
             ok, out, code = run_script('fetch-article.py', url, '--web')
             if not ok or code == 2:
                 if _should_switch_to_text(ok, out, code):
-                    # Use the script's own message if there is one, otherwise fall back to generic
-                    script_msg = out.strip().splitlines()[-1].strip() if out.strip() else ''
-                    user_msg   = (script_msg if script_msg
-                                  else 'This site is blocking automated scraping. Please use Text mode and paste from Reader Mode.')
                     with _fetch_lock:
                         _fetch_results[fetch_id] = {
                             'status':         'switch_to_text',
-                            'error':          user_msg,
+                            'error':          'This site is blocking automated scraping. Please use Text mode and paste from Reader Mode.',
                             'switch_to_text': True,
                         }
                     return
@@ -220,6 +216,7 @@ def finish_add(slug, url, mode, fetch_output):
         'error':         None,
         'added_at':      time.time(),
         'pipeline_type': pipeline_type,
+        'fetch_output':  (fetch_output + '\n' + meta_out).strip(),
     }
 
     with queue_lock:
