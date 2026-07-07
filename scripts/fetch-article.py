@@ -38,6 +38,85 @@ BLOCK_INDICATORS = [
     '403 forbidden',
 ]
 
+def is_steam_news_url(url):
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    return 'steampowered.com' in parsed.netloc and '/news/' in parsed.path
+
+def fetch_steam_news(url):
+    """Fetch a Steam news article via the ISteamNews API. Returns (title, author, text) or raises."""
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    # Path looks like: /news/app/4743930/view/690885979774387816
+    parts = parsed.path.strip('/').split('/')
+    try:
+        appid = parts[parts.index('app') + 1]
+        gid   = parts[parts.index('view') + 1]
+    except (ValueError, IndexError):
+        raise ValueError(f'Could not parse appid/gid from Steam URL: {url}')
+
+    api_url = (f'https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/'
+               f'?appid={appid}&count=20&maxlength=0&format=json')
+    r = requests.get(api_url, timeout=15)
+    r.raise_for_status()
+    items = r.json().get('appnews', {}).get('newsitems', [])
+
+    # The store page view/ id and the API gid are unrelated identifier schemes,
+    # and API item URLs are CDN paths that don't match the store URL.
+    # Fetch og:title from the page and match on title instead.
+    try:
+        page = requests.get(url, timeout=15)
+        from bs4 import BeautifulSoup as _BS
+        og = _BS(page.text, 'html.parser').find('meta', property='og:title')
+        page_title = og['content'].strip() if og and og.get('content') else ''
+        # og:title is often "Game - Article Title - Steam News", strip suffixes
+        for suffix in [' - Steam News', ' - Steam']:
+            if page_title.endswith(suffix):
+                page_title = page_title[:-len(suffix)].strip()
+                break
+        # Also strip game name prefix if present ("Guild Wars 3™ - Our Guild Wars Philosophy")
+        if ' - ' in page_title:
+            page_title = page_title.split(' - ', 1)[1].strip()
+    except Exception:
+        page_title = ''
+
+    def _title_norm(t):
+        return re.sub(r'\s+', ' ', t).strip().lower()
+
+    item = None
+    if page_title:
+        item = next((i for i in items
+                     if _title_norm(i.get('title', '')) == _title_norm(page_title)), None)
+    if not item:
+        raise ValueError(f'Article not found in API response (got {len(items)} items)')
+
+    title  = item.get('title', 'Untitled')
+    author = item.get('author', '').strip() or 'Unknown Author'
+    raw    = item.get('contents', '')
+
+    # Strip BBCode and Steam-specific markup
+    text = raw
+    # {STEAM_CLAN_IMAGE}/appid/hash.ext  — image refs, drop them
+    text = re.sub(r'\{STEAM_CLAN_IMAGE\}/\S+', '', text)
+    # [img]...[/img]
+    text = re.sub(r'\[img[^\]]*\].*?\[/img\]', '', text, flags=re.DOTALL|re.IGNORECASE)
+    # [url=...] link text [/url]  — keep the link text
+    text = re.sub(r'\[url=[^\]]*\]', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\[/url\]', '', text, flags=re.IGNORECASE)
+    # [previewyoutube=...]...[/previewyoutube]
+    text = re.sub(r'\[previewyoutube[^\]]*\].*?\[/previewyoutube\]', '', text, flags=re.DOTALL|re.IGNORECASE)
+    # Remaining [tag] / [/tag] pairs — strip tags, keep inner text
+    text = re.sub(r'\[/?\w[^\]]*\]', '', text)
+    # HTML entities
+    for ent, ch in [('&amp;', '&'), ('&lt;', '<'), ('&gt;', '>'),
+                    ('&nbsp;', ' '), ('&#39;', "'"), ('&quot;', '"')]:
+        text = text.replace(ent, ch)
+    # Collapse excessive blank lines
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = text.strip()
+
+    return title, author, text
+
 def is_blocked(title, text):
     title_lower    = title.lower()
     combined_lower = (title + ' ' + text).lower()
@@ -80,6 +159,41 @@ def fetch_article(url):
                        'album_art': None, 'slug': slug, 'source_url': url},
                       f, indent=2)
         print(f'  Slug:     {slug}')
+        return slug
+
+    elif is_steam_news_url(url):
+        print('  Steam news URL detected, fetching via API.')
+        try:
+            title, author, text = fetch_steam_news(url)
+        except ValueError as e:
+            print(f'  Steam article not available via API ({e}). Please use Text mode and paste from Reader Mode.')
+            sys.exit(2)
+        except Exception as e:
+            print(f'  Steam API request failed ({e}). Please use Text mode and paste from Reader Mode.')
+            sys.exit(2)
+        if not text:
+            print('  Steam API returned empty article body. Please use Text mode and paste from Reader Mode.')
+            sys.exit(2)
+        text = apply_phonetic_replacements(text)
+        slug = safe_slug(title)
+        # Write handoff so fetch-metadata uses our already-resolved title/author/slug
+        handoff = {
+            'clipboard_title':  title,
+            'clipboard_slug':   slug,
+            'clipboard_author': author,
+            'clipboard_site':   'Steam',
+        }
+        with open(os.path.join(INPUT_FOLDER, 'clipboard-handoff.json'),
+                  'w', encoding='utf-8') as f:
+            json.dump(handoff, f)
+        header   = f'{title}\r\nWritten by {author}\r\n\r\n\r\n'
+        txt_path = os.path.join(TEMP_FOLDER, f'{slug}.txt')
+        with open(txt_path, 'w', encoding='utf-8', newline='\r\n') as f:
+            f.write(header + text.replace('\n', '\r\n') + '\r\n[pause:3000]')
+        print(f'  Title:      {title}')
+        print(f'  Author:     {author}')
+        print(f'  Slug:       {slug}')
+        print(f'  Saved:      {txt_path}')
         return slug
 
     elif is_clipboard_domain(url):
@@ -144,11 +258,6 @@ def fetch_article(url):
                 sys.exit(2)
 
             slug = safe_slug(title)
-
-            with open(os.path.join(TEMP_FOLDER, f'slug-handoff-{slug}.json'),
-                      'w', encoding='utf-8') as f:
-                json.dump({'slug': slug, 'title': title, 'author': author,
-                           'source_url': url}, f, indent=2, ensure_ascii=False)
 
         except SystemExit:
             raise
