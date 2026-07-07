@@ -15,10 +15,36 @@ AUDIO_FOLDER  = get_audio_folder()
 TEMP_FOLDER   = get_temp_folder()
 OUTPUT_PREFIX = get_audio_output_prefix()
 
-def get_voice_file(override=None):
+def get_all_voices():
+    """Return list of (name, full_path) for all available voice MP3s."""
     from utils import get_voice_folder
     voice_folder = get_voice_folder()
     input_folder = get_input_folder()
+    seen  = set()
+    found = []
+    for folder in [voice_folder, input_folder]:
+        for path in glob.glob(os.path.join(folder, '*.mp3')):
+            name = os.path.basename(path)
+            if name not in seen:
+                seen.add(name)
+                found.append((name, path))
+    return found
+
+def get_voice_file(override=None):
+    import random
+    from utils import get_voice_folder
+    voice_folder = get_voice_folder()
+    input_folder = get_input_folder()
+
+    # Shuffle override: pick a random voice
+    if override == 'shuffle':
+        voices = get_all_voices()
+        if not voices:
+            print(f'  No voice MP3s found for shuffle.')
+            sys.exit(1)
+        name, path = random.choice(voices)
+        print(f'  Voice (shuffle): {name}')
+        return name, path
 
     # Use override if provided
     if override:
@@ -31,6 +57,17 @@ def get_voice_file(override=None):
 
     config     = load_config()
     voice_file = config.get('voice_file')
+
+    # Shuffle default: pick a random voice
+    if voice_file == 'shuffle':
+        voices = get_all_voices()
+        if not voices:
+            print(f'  No voice MP3s found for shuffle.')
+            sys.exit(1)
+        name, path = random.choice(voices)
+        print(f'  Voice (shuffle): {name}')
+        return name, path
+
     if voice_file:
         for folder in [voice_folder, input_folder]:
             full_path = os.path.join(folder, voice_file)
