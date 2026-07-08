@@ -1,11 +1,12 @@
 # generate-audio.py
 
-import os, sys, json, time, glob, shutil, datetime, csv
+import os, sys, json, time, glob, shutil, datetime, csv, subprocess
 import requests
 from utils import (
     load_config, get_comfy_url, get_workflow_file,
     get_input_folder, get_audio_folder, get_temp_folder,
-    get_audio_output_prefix, get_generation_logging_enabled, APP_DIR
+    get_audio_output_prefix, get_generation_logging_enabled,
+    get_chunk_word_count, APP_DIR
 )
 
 COMFY_URL     = get_comfy_url()
@@ -60,7 +61,10 @@ def get_article_txt_from_workflow():
 
 ARTICLE_TXT = get_article_txt_from_workflow()
 
-def patch_workflow(workflow, voice_file, voice_full_path):
+def patch_workflow(workflow, voice_file, voice_full_path,
+                   text_file=None, filename_prefix=None):
+    text_file       = text_file or ARTICLE_TXT
+    filename_prefix = filename_prefix or OUTPUT_PREFIX
     for node_id, node in workflow.items():
         ct = node.get('class_type', '')
         if ct == 'LoadAudio':
@@ -68,11 +72,11 @@ def patch_workflow(workflow, voice_file, voice_full_path):
             node['inputs']['audioUI'] = f'/api/view?filename={voice_file}&type=input&subfolder='
             print(f'  Voice:    {voice_file}')
         elif ct == 'LoadTextFromFileNode':
-            node['inputs']['file'] = f'input/{ARTICLE_TXT}'
-            print(f'  Text:     input/{ARTICLE_TXT}')
+            node['inputs']['file'] = f'input/{text_file}'
+            print(f'  Text:     input/{text_file}')
         elif ct == 'SaveAudioMP3':
-            node['inputs']['filename_prefix'] = OUTPUT_PREFIX
-            print(f'  Output:   {OUTPUT_PREFIX}_*.mp3')
+            node['inputs']['filename_prefix'] = filename_prefix
+            print(f'  Output:   {filename_prefix}_*.mp3')
     return workflow
 
 def count_words(path):
@@ -82,6 +86,43 @@ def count_words(path):
             return len(f.read().split())
     except Exception:
         return 0
+
+PAUSE_MARKER = '\r\n[pause:3000]'
+
+def split_text_into_chunks(text, target_words):
+    """Split article text into chunks at line boundaries only (never
+    mid-sentence), each targeting ~target_words words. The header
+    (title/byline) naturally stays with chunk 1 since it's just the
+    first line(s) of the text. The trailing [pause:3000] marker is
+    stripped and re-attached to the last chunk only. Returns a list of
+    chunk text strings in order."""
+    pause_suffix = ''
+    if text.endswith(PAUSE_MARKER):
+        text         = text[:-len(PAUSE_MARKER)]
+        pause_suffix = PAUSE_MARKER
+
+    lines         = text.split('\r\n')
+    chunks        = []
+    current_lines = []
+    current_words = 0
+
+    for line in lines:
+        line_words = len(line.split())
+        if current_lines and current_words + line_words > target_words:
+            chunks.append('\r\n'.join(current_lines))
+            current_lines = [line]
+            current_words = line_words
+        else:
+            current_lines.append(line)
+            current_words += line_words
+
+    if current_lines:
+        chunks.append('\r\n'.join(current_lines))
+    if not chunks:
+        chunks = ['']
+
+    chunks[-1] += pause_suffix
+    return chunks
 
 def get_generation_log_path():
     log_dir = os.path.join(APP_DIR, 'log')
@@ -184,6 +225,95 @@ def rename_output(slug):
     print(f'  Renamed:  {os.path.basename(files[0])} -> {slug}.mp3')
     return dest
 
+def write_chunk_file(text, filename):
+    path = os.path.join(INPUT_FOLDER, filename)
+    with open(path, 'w', encoding='utf-8', newline='') as f:
+        f.write(text)
+    return path
+
+def cleanup_temp_file(path):
+    if path and os.path.isfile(path):
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+
+def find_chunk_output(slug, chunk_index):
+    prefix_base = os.path.basename(OUTPUT_PREFIX)  # e.g. 'podcast'
+    pattern     = os.path.join(AUDIO_FOLDER,
+                               f'{prefix_base}_{slug}_c{chunk_index:02d}_*.mp3')
+    files = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
+    return files[0] if files else None
+
+def generate_chunk(slug, chunk_index, chunk_text, voice_file, voice_full_path):
+    """Submit one chunk to ComfyUI and wait for it. Returns
+    (status, detail, word_count, duration, output_path)."""
+    chunk_filename = f'article-{slug}-c{chunk_index:02d}.txt'
+    chunk_path     = write_chunk_file(chunk_text, chunk_filename)
+    word_count     = len(chunk_text.split())
+    print(f'  Chunk {chunk_index}: {word_count} words')
+
+    workflow = load_workflow()
+    workflow = patch_workflow(
+        workflow, voice_file, voice_full_path,
+        text_file=chunk_filename,
+        filename_prefix=f'{OUTPUT_PREFIX}_{slug}_c{chunk_index:02d}',
+    )
+
+    start_time = time.time()
+    prompt_id  = submit_workflow(workflow)
+    if not prompt_id:
+        cleanup_temp_file(chunk_path)
+        return ('error', 'Failed to get prompt_id from ComfyUI.',
+                word_count, time.time() - start_time, None)
+
+    status, detail = wait_for_completion(prompt_id)
+    duration = time.time() - start_time
+    cleanup_temp_file(chunk_path)
+
+    if status != 'success':
+        return status, detail, word_count, duration, None
+
+    output_path = find_chunk_output(slug, chunk_index)
+    if not output_path:
+        expected = f'{os.path.basename(OUTPUT_PREFIX)}_{slug}_c{chunk_index:02d}_*.mp3'
+        return ('error',
+                f'Chunk {chunk_index} completed but its output MP3 was not '
+                f'found (expected {expected}).',
+                word_count, duration, None)
+
+    return 'success', '', word_count, duration, output_path
+
+def merge_chunks(chunk_paths, slug):
+    """Concatenate chunk MP3s into {slug}.mp3 via ffmpeg's concat demuxer
+    (stream copy — no re-encoding, no quality loss). Deletes the chunk
+    files and the temp concat list once done."""
+    if not shutil.which('ffmpeg'):
+        raise RuntimeError(
+            'ffmpeg is required to merge chunked audio but was not found on PATH.')
+
+    dest      = os.path.join(AUDIO_FOLDER, f'{slug}.mp3')
+    list_path = os.path.join(TEMP_FOLDER, f'concat-{slug}.txt')
+    with open(list_path, 'w', encoding='utf-8') as f:
+        for p in chunk_paths:
+            safe_path = p.replace('\\', '/').replace("'", "'\\''")
+            f.write(f"file '{safe_path}'\n")
+
+    result = subprocess.run(
+        ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_path,
+         '-c', 'copy', dest],
+        capture_output=True, text=True
+    )
+
+    cleanup_temp_file(list_path)
+    for p in chunk_paths:
+        cleanup_temp_file(p)
+
+    if result.returncode != 0 or not os.path.isfile(dest):
+        raise RuntimeError(f'ffmpeg merge failed: {result.stderr}')
+
+    return dest
+
 def main(slug, voice_override=None):
     voice_file, voice_full_path = get_voice_file(voice_override)
     print(f'  Slug:     {slug}')
@@ -196,29 +326,71 @@ def main(slug, voice_override=None):
         shutil.copy2(voice_full_path, input_dest)
         print(f'  Copied voice to input folder.')
 
-    workflow  = load_workflow()
-    workflow  = patch_workflow(workflow, voice_file, voice_full_path)
-
     article_path = os.path.join(INPUT_FOLDER, ARTICLE_TXT)
-    word_count   = count_words(article_path)
+    with open(article_path, 'r', encoding='utf-8') as f:
+        full_text = f.read()
+    word_count = len(full_text.split())
     print(f'  Words:    {word_count}')
 
-    start_time = time.time()
-    prompt_id  = submit_workflow(workflow)
-    if not prompt_id:
+    chunk_target = get_chunk_word_count()
+
+    # --- Short article: single-shot path (unchanged behavior) ---
+    if word_count <= chunk_target:
+        workflow  = load_workflow()
+        workflow  = patch_workflow(workflow, voice_file, voice_full_path)
+
+        start_time = time.time()
+        prompt_id  = submit_workflow(workflow)
+        if not prompt_id:
+            log_generation(slug, word_count, voice_file, 'error',
+                           time.time() - start_time,
+                           'Failed to get prompt_id from ComfyUI.')
+            print('Failed to get prompt_id from ComfyUI.')
+            sys.exit(1)
+
+        status, detail = wait_for_completion(prompt_id)
+        log_generation(slug, word_count, voice_file, status,
+                       time.time() - start_time, detail)
+
+        if status != 'success':
+            sys.exit(1)
+        rename_output(slug)
+        return
+
+    # --- Long article: chunk, generate each piece, merge ---
+    chunks = split_text_into_chunks(full_text, chunk_target)
+    print(f'  Splitting into {len(chunks)} chunk(s) of ~{chunk_target} words each.')
+
+    chunk_outputs  = []
+    overall_start  = time.time()
+    for i, chunk_text in enumerate(chunks, start=1):
+        status, detail, c_words, c_duration, output_path = generate_chunk(
+            slug, i, chunk_text, voice_file, voice_full_path)
+
+        log_generation(f'{slug}-c{i:02d}', c_words, voice_file, status,
+                       c_duration, detail)
+
+        if status != 'success':
+            for p in chunk_outputs:
+                cleanup_temp_file(p)
+            print(f'  Chunk {i}/{len(chunks)} failed: {detail}')
+            sys.exit(1)
+
+        print(f'  Chunk {i}/{len(chunks)} complete ({c_duration:.0f}s).')
+        chunk_outputs.append(output_path)
+
+    print(f'  Merging {len(chunk_outputs)} chunk(s)...')
+    try:
+        merge_chunks(chunk_outputs, slug)
+    except Exception as e:
         log_generation(slug, word_count, voice_file, 'error',
-                       time.time() - start_time,
-                       'Failed to get prompt_id from ComfyUI.')
-        print('Failed to get prompt_id from ComfyUI.')
+                       time.time() - overall_start, str(e))
+        print(f'  Merge failed: {e}')
         sys.exit(1)
 
-    status, detail = wait_for_completion(prompt_id)
-    log_generation(slug, word_count, voice_file, status,
-                   time.time() - start_time, detail)
-
-    if status != 'success':
-        sys.exit(1)
-    rename_output(slug)
+    print(f'  Merged:   {slug}.mp3')
+    log_generation(slug, word_count, voice_file, 'success',
+                   time.time() - overall_start, f'{len(chunks)} chunk(s)')
 
 if __name__ == '__main__':
     import argparse

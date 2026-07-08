@@ -44,6 +44,8 @@ def get_audio_output_prefix(): return get_required('audio_output_prefix')
 def get_web_port():        return load_config().get('web_port', 8080)
 def get_generation_logging_enabled():
     return bool(load_config().get('generation_logging_enabled', True))
+def get_chunk_word_count():
+    return int(load_config().get('chunk_word_count', 1400))
 
 def safe_slug(title, max_len=50):
     s = title.lower()
