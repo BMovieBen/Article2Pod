@@ -49,10 +49,17 @@
     font-size: 22px;
     font-weight: 800;
     letter-spacing: -0.5px;
-    background: linear-gradient(135deg, var(--accent), var(--accent2));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    color: var(--accent); /* fallback if gradient text-clip isn't supported */
+  }
+
+  @supports (background-clip: text) or (-webkit-background-clip: text) {
+    header h1 {
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      color: transparent;
+    }
   }
 
   .status-dot {
@@ -1569,6 +1576,14 @@ async function startGenerate() {
     }
     loadLibrary();
   }
+
+  // iOS Safari/Firefox: tapping the Add button while the URL input is
+  // focused first has to dismiss the keyboard, which reflows the viewport
+  // and shifts the button — swallowing that first tap. Blur proactively on
+  // touchstart so the reflow happens before the tap is evaluated.
+  document.getElementById('addBtn').addEventListener('touchstart', () => {
+    document.getElementById('urlInput').blur();
+  });
 
   // Start polling
   schedulePoll(0);  // immediate first poll
