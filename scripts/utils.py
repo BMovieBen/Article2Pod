@@ -42,6 +42,8 @@ def get_user_agent():      return get_required('user_agent')
 def get_ad_strip_markers(): return load_config().get('ad_strip_markers', [])
 def get_audio_output_prefix(): return get_required('audio_output_prefix')
 def get_web_port():        return load_config().get('web_port', 8080)
+def get_generation_logging_enabled():
+    return bool(load_config().get('generation_logging_enabled', True))
 
 def safe_slug(title, max_len=50):
     s = title.lower()

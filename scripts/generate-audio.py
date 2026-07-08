@@ -1,11 +1,11 @@
 # generate-audio.py
 
-import os, sys, json, time, glob, shutil, datetime
+import os, sys, json, time, glob, shutil, datetime, csv
 import requests
 from utils import (
     load_config, get_comfy_url, get_workflow_file,
     get_input_folder, get_audio_folder, get_temp_folder,
-    get_audio_output_prefix, APP_DIR
+    get_audio_output_prefix, get_generation_logging_enabled, APP_DIR
 )
 
 COMFY_URL     = get_comfy_url()
@@ -15,36 +15,10 @@ AUDIO_FOLDER  = get_audio_folder()
 TEMP_FOLDER   = get_temp_folder()
 OUTPUT_PREFIX = get_audio_output_prefix()
 
-def get_all_voices():
-    """Return list of (name, full_path) for all available voice MP3s."""
-    from utils import get_voice_folder
-    voice_folder = get_voice_folder()
-    input_folder = get_input_folder()
-    seen  = set()
-    found = []
-    for folder in [voice_folder, input_folder]:
-        for path in glob.glob(os.path.join(folder, '*.mp3')):
-            name = os.path.basename(path)
-            if name not in seen:
-                seen.add(name)
-                found.append((name, path))
-    return found
-
 def get_voice_file(override=None):
-    import random
     from utils import get_voice_folder
     voice_folder = get_voice_folder()
     input_folder = get_input_folder()
-
-    # Shuffle override: pick a random voice
-    if override == 'shuffle':
-        voices = get_all_voices()
-        if not voices:
-            print(f'  No voice MP3s found for shuffle.')
-            sys.exit(1)
-        name, path = random.choice(voices)
-        print(f'  Voice (shuffle): {name}')
-        return name, path
 
     # Use override if provided
     if override:
@@ -57,17 +31,6 @@ def get_voice_file(override=None):
 
     config     = load_config()
     voice_file = config.get('voice_file')
-
-    # Shuffle default: pick a random voice
-    if voice_file == 'shuffle':
-        voices = get_all_voices()
-        if not voices:
-            print(f'  No voice MP3s found for shuffle.')
-            sys.exit(1)
-        name, path = random.choice(voices)
-        print(f'  Voice (shuffle): {name}')
-        return name, path
-
     if voice_file:
         for folder in [voice_folder, input_folder]:
             full_path = os.path.join(folder, voice_file)
@@ -112,6 +75,39 @@ def patch_workflow(workflow, voice_file, voice_full_path):
             print(f'  Output:   {OUTPUT_PREFIX}_*.mp3')
     return workflow
 
+def count_words(path):
+    """Word count of the text file actually sent to the TTS node."""
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return len(f.read().split())
+    except Exception:
+        return 0
+
+def get_generation_log_path():
+    log_dir = os.path.join(APP_DIR, 'log')
+    os.makedirs(log_dir, exist_ok=True)
+    return os.path.join(log_dir, 'generation-log.csv')
+
+def log_generation(slug, word_count, voice_file, status, duration, detail=''):
+    """Append one row per generation attempt: word count, duration, and
+    outcome, so timeout thresholds can be worked out from real data.
+    No-ops if generation_logging_enabled is false in config.json."""
+    if not get_generation_logging_enabled():
+        return
+    log_path = get_generation_log_path()
+    is_new   = not os.path.isfile(log_path)
+    with open(log_path, 'a', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        if is_new:
+            writer.writerow(['timestamp', 'slug', 'word_count', 'voice',
+                             'status', 'duration_seconds', 'detail'])
+        writer.writerow([
+            datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            slug, word_count, voice_file, status,
+            f'{duration:.1f}', detail,
+        ])
+    print(f'  Logged:   {status} in {duration:.1f}s ({word_count} words) -> {log_path}')
+
 def submit_workflow(workflow):
     response = requests.post(f'{COMFY_URL}/prompt',
                              json={'prompt': workflow}, timeout=30)
@@ -147,6 +143,8 @@ def log_comfyui_error(prompt_id, history_entry):
     print(f'  Error details logged to: {log_path}')
 
 def wait_for_completion(prompt_id, timeout=3600):
+    """Returns (status, detail) where status is 'success', 'error', or
+    'timeout', and detail is an error message (empty string on success)."""
     print(f'  Generating audio...')
     elapsed  = 0
     interval = 5
@@ -161,16 +159,19 @@ def wait_for_completion(prompt_id, timeout=3600):
                 status = history[prompt_id].get('status', {})
                 if status.get('completed'):
                     print(f'  Complete! ({elapsed}s)')
-                    return True
+                    return 'success', ''
                 if status.get('status_str') == 'error':
                     print(f'  Error reported by ComfyUI.')
                     log_comfyui_error(prompt_id, history[prompt_id])
-                    return False
+                    msgs   = status.get('messages', [])
+                    detail = '; '.join(str(m) for m in msgs) if msgs \
+                             else 'ComfyUI reported an error.'
+                    return 'error', detail
         except Exception:
             pass
 
     print(f'  Timed out after {timeout}s')
-    return False
+    return 'timeout', f'Timed out after {timeout}s'
 
 def rename_output(slug):
     pattern = os.path.join(AUDIO_FOLDER, 'podcast_*.mp3')
@@ -197,11 +198,25 @@ def main(slug, voice_override=None):
 
     workflow  = load_workflow()
     workflow  = patch_workflow(workflow, voice_file, voice_full_path)
-    prompt_id = submit_workflow(workflow)
+
+    article_path = os.path.join(INPUT_FOLDER, ARTICLE_TXT)
+    word_count   = count_words(article_path)
+    print(f'  Words:    {word_count}')
+
+    start_time = time.time()
+    prompt_id  = submit_workflow(workflow)
     if not prompt_id:
+        log_generation(slug, word_count, voice_file, 'error',
+                       time.time() - start_time,
+                       'Failed to get prompt_id from ComfyUI.')
         print('Failed to get prompt_id from ComfyUI.')
         sys.exit(1)
-    if not wait_for_completion(prompt_id):
+
+    status, detail = wait_for_completion(prompt_id)
+    log_generation(slug, word_count, voice_file, status,
+                   time.time() - start_time, detail)
+
+    if status != 'success':
         sys.exit(1)
     rename_output(slug)
 
