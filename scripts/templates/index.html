@@ -767,6 +767,7 @@
   let mode       = 'url';
   let isProcessing = false;
   let stopPending  = false;
+  let interruptErrorShown = false;  // guards against re-showing the same comfy interrupt error every poll
   let pollInterval    = 10000;  // default idle interval
   let pollTimer       = null;
   let confirmingSlug  = null;   // slug currently showing delete confirmation
@@ -1144,7 +1145,11 @@ async function startGenerate() {
   async function stopQueue() {
     stopPending = true;
     document.getElementById('generateBtn').textContent = 'Stopping...';
-    await fetch('/api/stop', {method: 'POST'});
+    const res  = await fetch('/api/stop', {method: 'POST'});
+    const data = await res.json();
+    if (data.comfy_interrupt_error) {
+      showError(data.comfy_interrupt_error);
+    }
     schedulePoll(0);
   }
 
@@ -1221,6 +1226,13 @@ async function startGenerate() {
 
       isProcessing = data.processing;
       renderQueue(data.queue, data.processing);
+
+      if (data.comfy_interrupt_error && !interruptErrorShown) {
+        interruptErrorShown = true;
+        showError(data.comfy_interrupt_error);
+      } else if (!data.comfy_interrupt_error) {
+        interruptErrorShown = false;
+      }
 
       const dot = document.getElementById('statusDot');
       dot.classList.toggle('active', data.processing);
