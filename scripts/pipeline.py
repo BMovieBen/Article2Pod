@@ -94,12 +94,14 @@ def run_script(script_name, *args):
     cmd         = ['python', os.path.join(scripts_dir, script_name)] + list(args)
     result      = subprocess.run(cmd, capture_output=True, text=True,
                                  encoding='utf-8', errors='replace')
-    # Filter out spinner lines from output
+    # Filter out spinner/noise lines from output only — never filter lines
+    # that indicate failure (e.g. 'Timed out'), or real errors get hidden
+    # from the queue's error message.
     filtered = '\n'.join(
         line for line in (result.stdout + result.stderr).splitlines()
         if not any(line.strip().startswith(s) for s in
                    ['- Generating', '\\ Generating', '| Generating', '/ Generating',
-                    'Complete!', 'Timed out'])
+                    'Complete!'])
     )
     return result.returncode == 0, filtered, result.returncode
 
