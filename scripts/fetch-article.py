@@ -259,6 +259,11 @@ def fetch_article(url):
 
             slug = safe_slug(title)
 
+            with open(os.path.join(TEMP_FOLDER, f'slug-handoff-{slug}.json'),
+                      'w', encoding='utf-8') as f:
+                json.dump({'slug': slug, 'title': title, 'author': author,
+                           'source_url': url}, f, indent=2, ensure_ascii=False)
+
         except SystemExit:
             raise
         except Exception as e:
