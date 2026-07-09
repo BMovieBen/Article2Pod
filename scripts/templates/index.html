@@ -45,21 +45,8 @@
     margin: 0 auto;
   }
 
-  header h1 {
-    font-size: 22px;
-    font-weight: 800;
-    letter-spacing: -0.5px;
-    color: var(--accent); /* fallback if gradient text-clip isn't supported */
-  }
-
-  @supports (background-clip: text) or (-webkit-background-clip: text) {
-    header h1 {
-      background: linear-gradient(135deg, var(--accent), var(--accent2));
-      -webkit-background-clip: text;
-      background-clip: text;
-      -webkit-text-fill-color: transparent;
-      color: transparent;
-    }
+  header svg {
+    display: block;
   }
 
   .status-dot {
@@ -125,20 +112,13 @@
     box-shadow: 0 1px 4px rgba(0,0,0,0.4);
   }
 
-  /* URL input row */
-  .url-row {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-  }
-
   input[type="text"], textarea {
     background: var(--surface2);
     border: 1px solid var(--border);
     border-radius: 8px;
     color: var(--text);
     font-family: var(--mono);
-    font-size: 13px;
+    font-size: 16px; /* iOS auto-zooms on focus for inputs under 16px */
     padding: 10px 14px;
     outline: none;
     transition: border-color 0.2s;
@@ -180,33 +160,6 @@
   }
 
   /* Add button */
-  .btn-add {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    color: var(--accent);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    height: 40px;
-    width: 40px;
-    transition: all 0.2s;
-    font-size: 20px;
-    font-weight: 300;
-  }
-
-  .btn-add:hover {
-    border-color: var(--accent);
-    background: rgba(74, 222, 128, 0.1);
-  }
-
-  .btn-add:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
   .btn-add-text {
     background: none;
     border: 1px solid var(--border);
@@ -226,6 +179,11 @@
   .btn-add-text:hover {
     border-color: var(--accent);
     background: rgba(74, 222, 128, 0.08);
+  }
+
+  .btn-add-text:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   /* Error banner */
@@ -678,7 +636,17 @@
 <body>
 
 <header>
-  <h1>Article2Pod</h1>
+  <svg width="150" height="28" viewBox="0 0 150 28" style="overflow:visible;flex-shrink:0;">
+    <defs>
+      <linearGradient id="logoGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" style="stop-color:var(--accent)" />
+        <stop offset="100%" style="stop-color:var(--accent2)" />
+      </linearGradient>
+    </defs>
+    <text x="0" y="21" font-family="Syne, sans-serif" font-size="22"
+          font-weight="800" letter-spacing="-0.5"
+          fill="url(#logoGradient)">Article2Pod</text>
+  </svg>
   <div style="display:flex;align-items:center;gap:12px;">
     <div class="status-dot" id="statusDot"></div>
     <button class="btn-gear" id="headerGear"
@@ -712,11 +680,9 @@
 
     <!-- URL mode -->
     <div id="urlMode">
-      <div class="url-row">
-        <input type="text" id="urlInput" placeholder="Paste article URL..."
-               onkeydown="if(event.key==='Enter') addUrl()">
-        <button class="btn-add" id="addBtn" onclick="addUrl()" title="Add to Queue">+</button>
-      </div>
+      <input type="text" id="urlInput" placeholder="Paste article URL..."
+             onkeydown="if(event.key==='Enter') addUrl()">
+      <button class="btn-add-text" id="addBtn" onclick="addUrl()">Add to Queue</button>
     </div>
 
     <!-- Text mode -->
