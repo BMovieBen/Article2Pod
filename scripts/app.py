@@ -338,22 +338,15 @@ def api_library_delete():
 def api_voices():
     """Return list of available voice sample MP3s."""
     import glob
-    from utils import get_voice_folder, get_input_folder, load_config
+    from utils import get_voice_folder, load_config
     voice_folder = get_voice_folder()
-    input_folder = get_input_folder()
     default      = load_config().get('voice_file', '')
 
-    # Scan both folders, deduplicate by filename
-    seen  = set()
-    names = []
-    for folder in [voice_folder, input_folder]:
-        for f in glob.glob(os.path.join(folder, '*.mp3')):
-            name = os.path.basename(f)
-            if name not in seen:
-                seen.add(name)
-                names.append(name)
+    names = sorted(
+        os.path.basename(f)
+        for f in glob.glob(os.path.join(voice_folder, '*.mp3'))
+    )
 
-    names.sort()
     return jsonify({'voices': ['shuffle'] + names, 'default': default})
 
 @app.route('/api/settings', methods=['POST'])

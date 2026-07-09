@@ -19,34 +19,29 @@ OUTPUT_PREFIX = get_audio_output_prefix()
 def get_voice_file(override=None):
     from utils import get_voice_folder
     voice_folder = get_voice_folder()
-    input_folder = get_input_folder()
 
     # Use override if provided
     if override:
-        # Check voice folder first, then input folder
-        for folder in [voice_folder, input_folder]:
-            full_path = os.path.join(folder, override)
-            if os.path.isfile(full_path):
-                return override, full_path
+        full_path = os.path.join(voice_folder, override)
+        if os.path.isfile(full_path):
+            return override, full_path
         print(f'  Voice override not found: {override}, falling back to default.')
 
     config     = load_config()
     voice_file = config.get('voice_file')
     if voice_file:
-        for folder in [voice_folder, input_folder]:
-            full_path = os.path.join(folder, voice_file)
-            if os.path.isfile(full_path):
-                return voice_file, full_path
+        full_path = os.path.join(voice_folder, voice_file)
+        if os.path.isfile(full_path):
+            return voice_file, full_path
 
-    # Fallback: first mp3 in voice folder, then input folder
-    for folder in [voice_folder, input_folder]:
-        voices = glob.glob(os.path.join(folder, '*.mp3'))
-        if voices:
-            name = os.path.basename(voices[0])
-            print(f'  No voice_file in config, defaulting to: {name}')
-            return name, voices[0]
+    # Fallback: first mp3 in voice folder
+    voices = glob.glob(os.path.join(voice_folder, '*.mp3'))
+    if voices:
+        name = os.path.basename(voices[0])
+        print(f'  No voice_file in config, defaulting to: {name}')
+        return name, voices[0]
 
-    print(f'No voice clone MP3 found in {voice_folder} or {input_folder}')
+    print(f'No voice clone MP3 found in {voice_folder}')
     sys.exit(1)
 
 def load_workflow():
