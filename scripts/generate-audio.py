@@ -1,6 +1,6 @@
 # generate-audio.py
 
-import os, sys, json, time, glob, shutil, datetime, csv, subprocess
+import os, sys, json, time, glob, shutil, datetime, csv, subprocess, re
 import requests
 from utils import (
     load_config, get_comfy_url, get_workflow_file,
@@ -89,40 +89,83 @@ def count_words(path):
 
 PAUSE_MARKER = '\r\n[pause:3000]'
 
+# Best-effort sentence boundary: a sentence-ending mark (optionally
+# followed by a closing quote), then whitespace, then what looks like the
+# start of a new sentence. Not a perfect NLP tokenizer (e.g. can misfire
+# on abbreviations like "U.S." or "Mr."), but for chunk-boundary purposes
+# an occasional early/late split is harmless -- it never cuts mid-word,
+# and true mid-sentence cuts are rare in practice.
+SENTENCE_SPLIT_RE = re.compile(
+    r'(?<=[.!?])[\'"\u2019\u201d]?\s+(?=[A-Z0-9"\u2018\u201c(])'
+)
+
+def split_into_sentences(paragraph):
+    """Best-effort sentence split of a single paragraph/line."""
+    paragraph = paragraph.strip()
+    if not paragraph:
+        return []
+    return [s.strip() for s in SENTENCE_SPLIT_RE.split(paragraph) if s.strip()]
+
 def split_text_into_chunks(text, target_words):
-    """Split article text into chunks at line boundaries only (never
-    mid-sentence), each targeting ~target_words words. The header
-    (title/byline) naturally stays with chunk 1 since it's just the
-    first line(s) of the text. The trailing [pause:3000] marker is
-    stripped and re-attached to the last chunk only. Returns a list of
-    chunk text strings in order."""
+    """Split article text into chunks that always end on a complete
+    sentence, each targeting ~target_words words.
+
+    Splits at the sentence level rather than the line level -- this is
+    deliberate: some sources (e.g. pasted Reader Mode text) don't preserve
+    one-paragraph-per-line structure, and a line-boundary-only splitter
+    can end up with the entire article as a single oversized "line" with
+    nowhere to break. Sentence-level splitting always has somewhere to
+    break as long as the text has more than one sentence.
+
+    Paragraph structure (line breaks, blank lines -- including the
+    header's spacing) is preserved: consecutive sentences from the same
+    original line are rejoined with a space, sentences starting a new
+    line are rejoined with \\r\\n. The trailing [pause:3000] marker is
+    stripped and re-attached to the last chunk only.
+    """
     pause_suffix = ''
     if text.endswith(PAUSE_MARKER):
         text         = text[:-len(PAUSE_MARKER)]
         pause_suffix = PAUSE_MARKER
 
-    lines         = text.split('\r\n')
+    # Flatten into (sentence_text, starts_new_paragraph) atoms.
+    atoms = []
+    for para in text.split('\r\n'):
+        if not para.strip():
+            atoms.append(('', True))  # blank line -- preserves spacing
+            continue
+        sentences = split_into_sentences(para) or [para.strip()]
+        for i, sent in enumerate(sentences):
+            atoms.append((sent, i == 0))
+
     chunks        = []
-    current_lines = []
+    current_atoms = []
     current_words = 0
 
-    for line in lines:
-        line_words = len(line.split())
-        if current_lines and current_words + line_words > target_words:
-            chunks.append('\r\n'.join(current_lines))
-            current_lines = [line]
-            current_words = line_words
-        else:
-            current_lines.append(line)
-            current_words += line_words
+    for atom_text, is_new_para in atoms:
+        atom_words = len(atom_text.split())
+        if current_atoms and current_words + atom_words > target_words:
+            chunks.append(current_atoms)
+            current_atoms = []
+            current_words = 0
+        current_atoms.append((atom_text, is_new_para))
+        current_words += atom_words
 
-    if current_lines:
-        chunks.append('\r\n'.join(current_lines))
+    if current_atoms:
+        chunks.append(current_atoms)
     if not chunks:
-        chunks = ['']
+        chunks = [[('', True)]]
 
-    chunks[-1] += pause_suffix
-    return chunks
+    def render(chunk_atoms):
+        parts = []
+        for atom_text, is_new_para in chunk_atoms:
+            sep = '\r\n' if is_new_para else ' '
+            parts.append((sep + atom_text) if parts else atom_text)
+        return ''.join(parts)
+
+    rendered = [render(c) for c in chunks]
+    rendered[-1] += pause_suffix
+    return rendered
 
 def get_generation_log_path():
     log_dir = os.path.join(APP_DIR, 'log')

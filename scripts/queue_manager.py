@@ -2,7 +2,7 @@
 # Queue load/save/cleanup
 
 import os, json, threading
-from utils import get_temp_folder, get_queue_file
+from utils import get_temp_folder, get_queue_file, get_audio_folder
 
 queue_lock = threading.Lock()
 
@@ -71,3 +71,23 @@ def cleanup_on_startup(log_level='off'):
                             print(f'[startup] Removed orphaned temp file: {f}')
                     except Exception:
                         pass
+
+def cleanup_orphaned_audio(log_level='off'):
+    """Remove any un-renamed podcast_*.mp3 files left in the audio folder
+    by failed or interrupted generations (single-shot or chunked). A
+    successful run always renames/merges its output to {slug}.mp3, so
+    anything still matching the generic podcast_*.mp3 pattern at startup
+    belongs, by definition, to a run that never finished. Safe to run
+    unconditionally at startup, since generation only happens while the
+    queue is actively processing -- never at idle startup."""
+    import glob
+    audio_folder = get_audio_folder()
+    if not os.path.isdir(audio_folder):
+        return
+    for f in glob.glob(os.path.join(audio_folder, 'podcast_*.mp3')):
+        try:
+            os.remove(f)
+            if log_level == 'verbose':
+                print(f'[startup] Removed orphaned audio file: {os.path.basename(f)}')
+        except Exception:
+            pass

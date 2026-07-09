@@ -14,7 +14,7 @@ from utils import (
 )
 from queue_manager import (
     queue_lock, load_queue, save_queue, get_queue_item,
-    delete_temp_files, cleanup_on_startup
+    delete_temp_files, cleanup_on_startup, cleanup_orphaned_audio
 )
 from pipeline import (
     is_comfyui_running, get_state,
@@ -410,6 +410,7 @@ if __name__ == '__main__':
     os.makedirs(os.path.join(APP_DIR, 'log'), exist_ok=True)
 
     cleanup_on_startup(config.get('log_level', 'off'))
+    cleanup_orphaned_audio(config.get('log_level', 'off'))
 
     threading.Thread(
         target=lambda: (time.sleep(1.5), webbrowser.open(f'http://localhost:{port}')),
