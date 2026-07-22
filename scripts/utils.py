@@ -167,7 +167,7 @@ JUNK_PATTERNS = [
     re.compile(r'all rights reserved',                           re.IGNORECASE),
     re.compile(r'may not be published',                          re.IGNORECASE),
     re.compile(r'sign up for',                                   re.IGNORECASE),
-    re.compile(r'sign in to your',                               re.IGNORECASE),
+    re.compile(r'sign in to your',                                re.IGNORECASE),
     re.compile(r'newsletter',                                    re.IGNORECASE),
     re.compile(r'subscribe',                                     re.IGNORECASE),
     re.compile(r'follow us on',                                  re.IGNORECASE),
@@ -175,7 +175,7 @@ JUNK_PATTERNS = [
     re.compile(r'read more',                                     re.IGNORECASE),
     re.compile(r'related articles?',                             re.IGNORECASE),
     re.compile(r'^\s*tags?:\s*',                                 re.IGNORECASE),
-    re.compile(r'^\s*topics?:\s*',                               re.IGNORECASE),
+    re.compile(r'^\s*topics?:\s*',                                re.IGNORECASE),
     re.compile(r'https?://',                                     re.IGNORECASE),
     re.compile(r'^\s*[@#]\w+'),
     re.compile(r'^\s*\d+\s+comments?'),
@@ -198,6 +198,74 @@ READING_TIME_RE = re.compile(
     re.IGNORECASE
 )
 
+# Firefox-on-iOS reader mode (Format B) omits the site name and author lines
+# entirely, giving just: Title / "Jul 20, 2026, 2:55 PM" / body. Without
+# this, the fixed site/title/author header-line assumption below shifts by
+# one and swaps the real title for the date, and the first body paragraph
+# for the author.
+DATE_LINE_RE = re.compile(
+    r'^\w{3,9}\.?\s+\d{1,2},\s+\d{4},?\s+\d{1,2}:\d{2}\s*[AP]\.?M\.?$',
+    re.IGNORECASE
+)
+
+# Polygon-on-iOS reader mode (Format C) gives: Title / Author / "Follow" /
+# "Link copied to clipboard" / a bare vote count / "By" / "Published <date>
+# <time> <tz>" / dek lines / caption / body. The trailing timezone and
+# "Published" prefix mean this never matches DATE_LINE_RE above, so it
+# needs its own boundary marker.
+PUBLISHED_LINE_RE = re.compile(
+    r'^published\s+\w+\.?\s+\d{1,2},\s+\d{4},?\s+\d{1,2}:\d{2}\s*[AP]\.?M\.?'
+    r'(\s+[A-Za-z]{2,5})?$',
+    re.IGNORECASE
+)
+
+# UI chrome lines that can appear between the author and the Published line
+# in Format C — skipped when scanning for the real author line.
+HEADER_JUNK_LINE_RE = re.compile(r'^(follow|link copied to clipboard|by)$', re.IGNORECASE)
+BYLINE_RE = re.compile(r'^by\s+', re.IGNORECASE)
+
+# Wire-service datelines ("DETROIT (AP) — ...") are a reliable fallback
+# for the site name when reader mode gives us no site/source at all (e.g.
+# Firefox-on-iOS, Polygon-on-iOS). Only checked when site is otherwise
+# unknown.
+WIRE_SERVICE_NAMES = {
+    'AP':      'Associated Press',
+    'REUTERS': 'Reuters',
+    'AFP':     'AFP',
+    'UPI':     'UPI',
+}
+WIRE_SERVICE_RE = re.compile(
+    r'^[A-Z][A-Za-z.\'\s]{0,40}\(\s*(AP|Reuters|AFP|UPI)\s*\)\s*[—\-]',
+)
+
+# Some sites' iOS reader-mode paste includes a login prompt naming the site
+# itself, e.g. "Sign in to your Polygon.com account" -- normally dropped
+# entirely by the 'sign in to your' JUNK_PATTERN, but worth extracting as a
+# site-name fallback before it gets discarded.
+SIGNIN_SITE_RE = re.compile(
+    r'sign in to your\s+([A-Za-z0-9][A-Za-z0-9\-]*\.[A-Za-z]{2,})\s+account',
+    re.IGNORECASE
+)
+
+def detect_wire_service(body_lines, max_lines=3):
+    """Look at the first few body lines for a wire-service dateline like
+    'DETROIT (AP) — ...' and return the full service name if found,
+    else None."""
+    for line in body_lines[:max_lines]:
+        m = WIRE_SERVICE_RE.match(line)
+        if m:
+            return WIRE_SERVICE_NAMES.get(m.group(1).upper())
+    return None
+
+def detect_signin_site(body_lines, max_lines=10):
+    """Look at the first several body lines for a 'Sign in to your
+    <site> account' prompt and return the site name if found, else None."""
+    for line in body_lines[:max_lines]:
+        m = SIGNIN_SITE_RE.search(line)
+        if m:
+            return m.group(1)
+    return None
+
 def parse_reader_mode(text):
     """
     Parse reader mode pasted text.
@@ -209,32 +277,88 @@ def parse_reader_mode(text):
     text = text.replace('\u2018', "'").replace('\u2019', "'")  # smart single quotes
     text = text.replace('\u201c', '"').replace('\u201d', '"')  # smart double quotes
     text = text.replace('\u2013', '-').replace('\u2014', '-')  # em/en dashes
-    # ... rest of function unchanged
 
-    # Normalize line endings
-    text   = text.replace('\r\n', '\n').replace('\r', '\n')
-    lines  = text.splitlines()
+    lines    = text.splitlines()
     nonempty = [l.strip() for l in lines if l.strip()]
 
-    # Find reading time marker — everything before it is header
-    header_lines     = []
+    if not nonempty:
+        return '', 'Untitled', 'Unknown Author', ''
+
+    # Format A (most browsers): Site / Title / Author / ... / reading-time marker / body
     reading_time_idx = None
-    for i, line in enumerate(nonempty):
+    for i, line in enumerate(nonempty[:10]):
         if READING_TIME_RE.match(line):
             reading_time_idx = i
             break
-        header_lines.append(line)
 
-    site   = header_lines[0] if len(header_lines) > 0 else ''
-    title  = header_lines[1] if len(header_lines) > 1 else 'Untitled'
-    author = header_lines[2] if len(header_lines) > 2 else 'Unknown Author'
-    author = clean_author(author)
+    # Format B (Firefox on iOS): Title / bare date-time line / body -- no
+    # site name, no author, no reading-time marker.
+    date_idx = None
+    if reading_time_idx is None:
+        for i, line in enumerate(nonempty[:10]):
+            if DATE_LINE_RE.match(line):
+                date_idx = i
+                break
 
-    # Body: everything after reading time, or after first 3 header lines
+    # Format C (Polygon on iOS): Title / Author / UI chrome / "Published
+    # <date>" -- no site name, no reading-time marker, date line has a
+    # "Published" prefix and trailing timezone so it never matches Format B.
+    published_idx = None
+    if reading_time_idx is None and date_idx is None:
+        for i, line in enumerate(nonempty[:15]):
+            if PUBLISHED_LINE_RE.match(line):
+                published_idx = i
+                break
+
     if reading_time_idx is not None:
+        header_lines = nonempty[:reading_time_idx]
+        site   = header_lines[0] if len(header_lines) > 0 else ''
+        title  = header_lines[1] if len(header_lines) > 1 else 'Untitled'
+        author = header_lines[2] if len(header_lines) > 2 else 'Unknown Author'
+        author = clean_author(author)
         body_source = nonempty[reading_time_idx + 1:]
+
+    elif date_idx is not None:
+        header_lines = nonempty[:date_idx]
+        title  = header_lines[0] if header_lines else 'Untitled'
+        site   = ''
+        author = 'Unknown Author'
+        body_source = nonempty[date_idx + 1:]
+        # Some variants still include a "By <name>" line right after the date
+        if body_source and BYLINE_RE.match(body_source[0]):
+            author      = clean_author(body_source[0])
+            body_source = body_source[1:]
+
+    elif published_idx is not None:
+        title  = nonempty[0] if nonempty else 'Untitled'
+        site   = ''
+        author = 'Unknown Author'
+        # Scan lines between title and the Published line for the first
+        # one that isn't known UI chrome (Follow, Link copied to
+        # clipboard, By, or a bare vote/comment count) -- that's the author.
+        for line in nonempty[1:published_idx]:
+            if HEADER_JUNK_LINE_RE.match(line):
+                continue
+            if re.match(r'^\d+$', line):
+                continue
+            author = clean_author(line)
+            break
+        body_source = nonempty[published_idx + 1:]
+
     else:
-        body_source = nonempty[min(3, len(nonempty)):]
+        header_lines = nonempty[:3]
+        site   = header_lines[0] if len(header_lines) > 0 else ''
+        title  = header_lines[1] if len(header_lines) > 1 else 'Untitled'
+        author = header_lines[2] if len(header_lines) > 2 else 'Unknown Author'
+        author = clean_author(author)
+        body_source = nonempty[3:]
+
+    # Site fallback chain: if we still don't have a site/source, check the
+    # body for self-identifying strings before giving up. Order matters --
+    # a wire-service dateline is checked first since it's the more specific
+    # signal; the sign-in prompt is a broader net across more sites.
+    if not site:
+        site = detect_wire_service(body_source) or detect_signin_site(body_source)
 
     title_norm = title.strip().lower()
     body_lines = []

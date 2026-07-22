@@ -19,7 +19,8 @@ def check_dependencies():
         print('  yt-dlp is not found on PATH.')
         answer = input('  Install yt-dlp via pip now? [Y/N]: ').strip().upper()
         if answer == 'Y':
-            result = subprocess.run(['python', '-m', 'pip', 'install', 'yt-dlp'],
+            # FIX: Use sys.executable instead of hardcoded 'python'
+            result = subprocess.run([sys.executable, '-m', 'pip', 'install', 'yt-dlp'],
                                     capture_output=True, text=True)
             if result.returncode != 0:
                 print(f'  Installation failed: {result.stderr}')
@@ -35,20 +36,23 @@ def update_ytdlp():
         return
     _ytdlp_updated_this_session = True
     print('  Checking for yt-dlp updates...')
-    result = subprocess.run(['yt-dlp', '-U'], capture_output=True, text=True)
-    output = (result.stdout + result.stderr).lower()
-    if 'up to date' in output:
-        print('  yt-dlp is up to date.')
-    elif 'updated' in output or 'updating' in output:
+    
+    # FIX: Update via sys.executable pip to ensure target env is updated
+    result = subprocess.run([sys.executable, '-m', 'pip', 'install', '-U', 'yt-dlp'], capture_output=True, text=True)
+    if result.returncode == 0:
         print('  yt-dlp updated successfully.')
     else:
-        subprocess.run(['python', '-m', 'pip', 'install', '-U', 'yt-dlp'],
-                       capture_output=True)
-        print('  yt-dlp update attempted via pip.')
+        print(f'  yt-dlp update warning: {result.stderr}')
 
 def get_video_metadata(url):
     result = subprocess.run(
-        ['yt-dlp', '--dump-json', '--no-playlist', url],
+        [
+            'yt-dlp', 
+            '--dump-json', 
+            '--no-playlist', 
+            '--extractor-args', 'youtube:player_client=default,android', # FIX: Add player client workaround
+            url
+        ],
         capture_output=True, text=True
     )
     if result.returncode != 0:
@@ -58,13 +62,17 @@ def get_video_metadata(url):
 
 def download_audio(url, slug):
     dest   = os.path.join(AUDIO_FOLDER, f'{slug}.mp3')
+    
+    # FIX: Removed explicit '--format', 'bestaudio/best'
+    # FIX: Added --extractor-args to bypass 403 Forbidden signature blocks
     result = subprocess.run([
         'yt-dlp', '--no-playlist', '--extract-audio',
         '--audio-format', 'mp3', '--audio-quality', '0',
-        '--format', 'bestaudio/best',
+        '--extractor-args', 'youtube:player_client=default,android',
         '--postprocessor-args', 'ffmpeg:-q:a 0 -ac 2 -joint_stereo 1',
         '--output', dest, url
     ], capture_output=True, text=True)
+    
     if result.returncode != 0:
         print(f'  Download failed: {result.stderr}')
         sys.exit(1)

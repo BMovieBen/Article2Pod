@@ -1,6 +1,6 @@
 # generate-audio.py
 
-import os, sys, json, time, glob, shutil, datetime, csv, subprocess, re
+import os, sys, json, time, glob, shutil, datetime, csv, subprocess, re, random
 import requests
 from utils import (
     load_config, get_comfy_url, get_workflow_file,
@@ -16,12 +16,27 @@ AUDIO_FOLDER  = get_audio_folder()
 TEMP_FOLDER   = get_temp_folder()
 OUTPUT_PREFIX = get_audio_output_prefix()
 
+def pick_shuffle_voice(voice_folder):
+    """Randomly select one mp3 from voice_folder. Called once per article
+    (from get_voice_file, which is itself only called once in main()), so
+    a chunked article's chunks all reuse the same randomly-chosen voice."""
+    voices = glob.glob(os.path.join(voice_folder, '*.mp3'))
+    if not voices:
+        print(f'No voice clone MP3 found in {voice_folder}')
+        sys.exit(1)
+    chosen = random.choice(voices)
+    name   = os.path.basename(chosen)
+    print(f'  Shuffle:  randomly selected {name}')
+    return name, chosen
+
 def get_voice_file(override=None):
     from utils import get_voice_folder
     voice_folder = get_voice_folder()
 
     # Use override if provided
     if override:
+        if override == 'shuffle':
+            return pick_shuffle_voice(voice_folder)
         full_path = os.path.join(voice_folder, override)
         if os.path.isfile(full_path):
             return override, full_path
@@ -29,6 +44,8 @@ def get_voice_file(override=None):
 
     config     = load_config()
     voice_file = config.get('voice_file')
+    if voice_file == 'shuffle':
+        return pick_shuffle_voice(voice_folder)
     if voice_file:
         full_path = os.path.join(voice_folder, voice_file)
         if os.path.isfile(full_path):
