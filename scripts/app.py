@@ -1,7 +1,7 @@
 # app.py
 # Article2Pod Web UI - Flask routes
 
-import os, sys, json, base64, glob, logging, webbrowser, threading, time
+import os, sys, json, base64, glob, logging
 from flask import Flask, request, jsonify, render_template, send_file
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -404,11 +404,6 @@ if __name__ == '__main__':
 
     cleanup_on_startup(config.get('log_level', 'off'))
     cleanup_orphaned_audio(config.get('log_level', 'off'))
-
-    threading.Thread(
-        target=lambda: (time.sleep(1.5), webbrowser.open(f'http://localhost:{port}')),
-        daemon=True
-    ).start()
 
     print(f'Article2Pod Web UI running at http://localhost:{port}')
     print('Press Ctrl+C to stop.')
