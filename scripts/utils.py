@@ -65,6 +65,23 @@ def clean_author(text):
     text = re.sub(r'\s+(reported\s+from|reporting\s+from|in\s+[A-Z][a-z]+).+$', '', text).strip()
     return re.sub(r'  +', ' ', text)
 
+# TLDs stripped when turning a bare domain into a display-friendly site
+# name. Case-sensitive on the remainder — whatever capitalization the
+# source used (og:site_name-less scrape, or text pasted from reader mode)
+# is preserved as-is rather than forcing title-case, since brand names
+# like "NYTimes" or "IGN" don't follow simple capitalization rules.
+_DOMAIN_TLD_RE = re.compile(r'\.(com|net|org|co|io|tv|news)$', re.IGNORECASE)
+
+def domain_to_site_name(domain):
+    """Turn a bare domain like 'Polygon.com' into a display-friendly site
+    name by stripping a trailing TLD, preserving whatever capitalization
+    was already present (e.g. 'NYTimes.com' -> 'NYTimes'). Used both as
+    the last-resort site-name fallback when scraping (no og:site_name tag)
+    and when extracting a site name mentioned in reader-mode pasted text."""
+    domain = domain.strip()
+    name   = _DOMAIN_TLD_RE.sub('', domain)
+    return name or domain
+
 def get_title(soup, doc):
     # 1. Try <h1> — but skip short ones that are likely site names/logos
     h1 = soup.find('h1')
@@ -123,7 +140,8 @@ def get_site_name(soup, base_url):
     og = soup.find('meta', property='og:site_name')
     if og and og.get('content', '').strip():
         return og['content'].strip()
-    return urlparse(base_url).netloc.replace('www.', '')
+    domain = urlparse(base_url).netloc.replace('www.', '')
+    return domain_to_site_name(domain)
 
 def apply_phonetic_replacements(text):
     for phrase, phonetic in load_config().get('phonetic_replacements', {}).items():
@@ -167,7 +185,7 @@ JUNK_PATTERNS = [
     re.compile(r'all rights reserved',                           re.IGNORECASE),
     re.compile(r'may not be published',                          re.IGNORECASE),
     re.compile(r'sign up for',                                   re.IGNORECASE),
-    re.compile(r'sign in to your',                                re.IGNORECASE),
+    re.compile(r'sign in to your',                               re.IGNORECASE),
     re.compile(r'newsletter',                                    re.IGNORECASE),
     re.compile(r'subscribe',                                     re.IGNORECASE),
     re.compile(r'follow us on',                                  re.IGNORECASE),
@@ -259,11 +277,13 @@ def detect_wire_service(body_lines, max_lines=3):
 
 def detect_signin_site(body_lines, max_lines=10):
     """Look at the first several body lines for a 'Sign in to your
-    <site> account' prompt and return the site name if found, else None."""
+    <site> account' prompt and return a display-friendly site name if
+    found, else None. Preserves the capitalization used in the prompt
+    itself (e.g. 'Polygon.com' -> 'Polygon', 'NYTimes.com' -> 'NYTimes')."""
     for line in body_lines[:max_lines]:
         m = SIGNIN_SITE_RE.search(line)
         if m:
-            return m.group(1)
+            return domain_to_site_name(m.group(1))
     return None
 
 def parse_reader_mode(text):
