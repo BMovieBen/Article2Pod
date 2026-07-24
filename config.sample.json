@@ -26,5 +26,11 @@
   ],
   "phonetic_replacements": {
     "2026": "twenty twenty six"
+  },
+  "domain_overrides": {
+    "sample.com": {
+      "voice_file": "your-voice-sample.mp3",
+      "art_path": "art\\sample-default.jpg"
+    }
   }
 }

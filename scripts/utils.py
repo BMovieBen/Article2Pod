@@ -143,6 +143,64 @@ def get_site_name(soup, base_url):
     domain = urlparse(base_url).netloc.replace('www.', '')
     return domain_to_site_name(domain)
 
+def resolve_domain(url='', site_hint=''):
+    """Best-effort bare domain (e.g. 'esquire.com') from a URL, falling
+    back to a site-name hint when no URL is available -- used for URL-mode
+    articles where the domain is known outright, and as a secondary signal
+    for Text mode where some Reader Mode pastes put a raw domain on the
+    site line. Only treats site_hint as a domain if it actually looks like
+    one (has a dot, no spaces) -- a display name like 'The Verge' is not
+    mistaken for a domain."""
+    domain = urlparse(url).netloc.replace('www.', '') if url else ''
+    if not domain and site_hint:
+        hint = site_hint.strip()
+        if '.' in hint and ' ' not in hint:
+            domain = re.sub(r'^https?://', '', hint).split('/')[0].replace('www.', '').strip()
+    return domain.lower()
+
+def get_domain_overrides():
+    return load_config().get('domain_overrides', {})
+
+def get_domain_override(url='', site_hint=''):
+    """Return the domain_overrides config entry (dict, possibly containing
+    'voice_file' and/or 'art_path') for the given url or site_hint, or
+    None if nothing matches. Two independent match strategies, since URL
+    mode and Text mode give very different signals:
+      - URL mode: url's real domain, matched by suffix (so 'esquire.com'
+        in config also matches 'www.esquire.com').
+      - Text mode: no URL exists, only whatever site name Reader Mode put
+        on the header line (e.g. 'Esquire' or, on some sites, a raw
+        domain like 'esquire.com'). Matched against both the configured
+        domain as-is and its TLD-stripped display form ('esquire.com' ->
+        'esquire'), case-insensitively.
+    art_path is resolved relative to APP_DIR if not already absolute."""
+    domain    = resolve_domain(url, site_hint)
+    hint_name = ''
+    if site_hint:
+        hint_name = re.sub(r'^https?://', '', site_hint.strip()) \
+                      .split('/')[0].replace('www.', '').strip().lower()
+
+    if not domain and not hint_name:
+        return None
+
+    for d, cfg in get_domain_overrides().items():
+        d_norm = d.lower().replace('www.', '').strip()
+        d_bare = domain_to_site_name(d_norm).lower()
+
+        matched = False
+        if domain and (domain == d_norm or domain.endswith('.' + d_norm)):
+            matched = True
+        elif hint_name and (hint_name == d_norm or hint_name == d_bare):
+            matched = True
+
+        if matched:
+            resolved = dict(cfg)
+            art_path = resolved.get('art_path')
+            if art_path and not os.path.isabs(art_path):
+                resolved['art_path'] = os.path.join(APP_DIR, art_path)
+            return resolved
+    return None
+
 def apply_phonetic_replacements(text):
     for phrase, phonetic in load_config().get('phonetic_replacements', {}).items():
         text = text.replace(phrase, phonetic)

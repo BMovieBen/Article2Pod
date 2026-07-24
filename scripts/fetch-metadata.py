@@ -3,16 +3,15 @@
 
 import os, sys, json, glob, random, time
 import requests
-import re
 from readability import Document
 from bs4 import BeautifulSoup
 from PIL import Image
 from io import BytesIO
-from urllib.parse import urlparse
 from ddgs import DDGS
 from utils import (
     safe_slug, get_title, get_author, get_site_name,
-    get_temp_folder, get_input_folder, APP_DIR
+    get_temp_folder, get_input_folder, APP_DIR,
+    get_domain_override, resolve_domain
 )
 
 INPUT_FOLDER = get_input_folder()
@@ -73,11 +72,25 @@ def search_image(query):
 def get_article_image(url, soup, title='', site_hint=''):
     """
     Try to get album art in order:
+    0. Domain override art_path (config domain_overrides) — skips scraping entirely
     1. OG image tag
     2. DuckDuckGo image search on title
     3. Google Favicon
     4. Default art fallback
     """
+    # 0. Domain override — bypasses scraping if configured for this site
+    override = get_domain_override(url, site_hint)
+    if override and override.get('art_path'):
+        art_path_cfg = override['art_path']
+        if os.path.isfile(art_path_cfg):
+            try:
+                print(f'  Art: using domain override image ({art_path_cfg})')
+                return Image.open(art_path_cfg).convert('RGB')
+            except Exception as e:
+                print(f'  Art: failed to load domain override image: {e}')
+        else:
+            print(f'  Art: domain override art_path not found: {art_path_cfg}')
+
     # 1. OG image
     og = soup.find('meta', property='og:image')
     if og and og.get('content'):
@@ -95,10 +108,7 @@ def get_article_image(url, soup, title='', site_hint=''):
             return img
 
     # 3. Google Favicon — use url domain or site_hint from clipboard
-    domain = urlparse(url).netloc.replace('www.', '') if url else ''
-    if not domain and site_hint:
-        # Strip any path/protocol from site_hint — it may be raw like "ktla.com"
-        domain = re.sub(r'^https?://', '', site_hint).split('/')[0].replace('www.', '').strip()
+    domain = resolve_domain(url, site_hint)
     if domain:
         img = fetch_and_resize_image(
             f'https://www.google.com/s2/favicons?sz=128&domain={domain}')
@@ -111,7 +121,6 @@ def get_article_image(url, soup, title='', site_hint=''):
     if os.path.isfile(default_art):
         print('  Art: using default_art.jpg')
         try:
-            from PIL import Image
             return Image.open(default_art).convert('RGB')
         except Exception as e:
             print(f'  Art: failed to load default_art.jpg: {e}')

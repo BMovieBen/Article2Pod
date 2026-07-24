@@ -8,7 +8,7 @@ from utils import (
     safe_slug, clean_author, get_temp_folder, get_input_folder,
     apply_phonetic_replacements, is_clipboard_domain, is_youtube_url,
     fetch_and_resize_image, JUNK_PATTERNS, READING_TIME_RE, parse_reader_mode,
-    sanitize_filename
+    sanitize_filename, get_domain_override
 )
 from queue_manager import queue_lock, load_queue, save_queue
 
@@ -196,6 +196,12 @@ def finish_add(slug, url, mode, fetch_output):
     with open(json_path, 'r', encoding='utf-8') as f:
         meta = json.load(f)
 
+    # Domain-based voice override — url covers URL mode; meta['album']
+    # (the resolved site name) covers Text mode, where there's no URL to
+    # key off of. get_domain_override() tries both.
+    domain_override = get_domain_override(url, meta.get('album', ''))
+    voice_override   = domain_override.get('voice_file') if domain_override else None
+
     art_b64 = None
     art     = meta.get('album_art')
     if art and os.path.isfile(art):
@@ -220,6 +226,7 @@ def finish_add(slug, url, mode, fetch_output):
         'error':         None,
         'added_at':      time.time(),
         'pipeline_type': pipeline_type,
+        'voice':         voice_override,
         'fetch_output':  (fetch_output + '\n' + meta_out).strip(),
     }
 
