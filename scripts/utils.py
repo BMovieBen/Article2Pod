@@ -311,7 +311,7 @@ WIRE_SERVICE_NAMES = {
     'UPI':     'UPI',
 }
 WIRE_SERVICE_RE = re.compile(
-    r'^[A-Z][A-Za-z.\'\s]{0,40}\(\s*(AP|Reuters|AFP|UPI)\s*\)\s*[—\-]',
+    r'^[A-Z][A-Za-z.,\'\s]{0,40}\(\s*(AP|Reuters|AFP|UPI)\s*\)\s*[—\-]',
 )
 
 # Some sites' iOS reader-mode paste includes a login prompt naming the site
@@ -388,6 +388,23 @@ def parse_reader_mode(text):
                 published_idx = i
                 break
 
+    # Format D (wire-service / bylined articles, no site line, no
+    # reading-time marker, no date/Published line -- e.g. AP pieces synced
+    # via Apple News or similar): Title / "BY <name(s)>" / body, or
+    # occasionally the byline before the title. Without this, the fallback
+    # below assumes a 3-line site/title/author header and shifts every
+    # field by one -- the byline becomes the "title" (breaking every future
+    # article sharing that byline, since the title never changes), and the
+    # real first paragraph of body text gets swallowed as the "author".
+    # Only checked at index 0/1 -- a byline at index 2 already matches the
+    # ordinary site/title/author fallback correctly and is left alone.
+    byline_idx = None
+    if reading_time_idx is None and date_idx is None and published_idx is None:
+        for i, line in enumerate(nonempty[:2]):
+            if BYLINE_RE.match(line):
+                byline_idx = i
+                break
+
     if reading_time_idx is not None:
         header_lines = nonempty[:reading_time_idx]
         site   = header_lines[0] if len(header_lines) > 0 else ''
@@ -422,6 +439,16 @@ def parse_reader_mode(text):
             author = clean_author(line)
             break
         body_source = nonempty[published_idx + 1:]
+
+    elif byline_idx is not None:
+        if byline_idx == 0:
+            author = clean_author(nonempty[0])
+            title  = nonempty[1] if len(nonempty) > 1 else 'Untitled'
+        else:  # byline_idx == 1
+            title  = nonempty[0]
+            author = clean_author(nonempty[1])
+        site        = ''
+        body_source = nonempty[byline_idx + 1:]
 
     else:
         header_lines = nonempty[:3]

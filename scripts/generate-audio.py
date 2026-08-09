@@ -6,7 +6,8 @@ from utils import (
     load_config, get_comfy_url, get_workflow_file,
     get_input_folder, get_audio_folder, get_temp_folder,
     get_audio_output_prefix, get_generation_logging_enabled,
-    get_chunk_word_count, APP_DIR
+    get_chunk_word_count, APP_DIR,
+    get_audio_normalize_enabled, normalize_audio
 )
 
 COMFY_URL     = get_comfy_url()
@@ -203,6 +204,24 @@ def log_generation(slug, word_count, voice_file, status, duration, detail=''):
             f'{duration:.1f}', detail,
         ])
     print(f'  Logged:   {status} in {duration:.1f}s ({word_count} words) -> {log_path}')
+
+def normalize_audio_step(slug, mp3_path, word_count=0, voice_file=''):
+    """No-op unless audio_normalize_enabled is set in config. Runs ffmpeg
+    dynamic normalization on the finished MP3 in place. Never fails the
+    overall run -- if normalization errors out, the original (unnormalized)
+    file is left in place and the failure is just logged."""
+    if not get_audio_normalize_enabled():
+        return
+    print('  Normalizing audio...')
+    start_time = time.time()
+    ok, err    = normalize_audio(mp3_path)
+    duration   = time.time() - start_time
+    if ok:
+        print(f'  Normalized: {duration:.1f}s')
+        log_generation(slug, word_count, voice_file, 'normalized', duration, '')
+    else:
+        print(f'  Normalization failed, keeping original audio: {err}')
+        log_generation(slug, word_count, voice_file, 'normalize_failed', duration, err)
 
 def submit_workflow(workflow):
     response = requests.post(f'{COMFY_URL}/prompt',
@@ -409,7 +428,8 @@ def main(slug, voice_override=None):
 
         if status != 'success':
             sys.exit(1)
-        rename_output(slug)
+        dest = rename_output(slug)
+        normalize_audio_step(slug, dest, word_count, voice_file)
         return
 
     # --- Long article: chunk, generate each piece, merge ---
@@ -446,6 +466,9 @@ def main(slug, voice_override=None):
     print(f'  Merged:   {slug}.mp3')
     log_generation(slug, word_count, voice_file, 'success',
                    time.time() - overall_start, f'{len(chunks)} chunk(s)')
+
+    merged_path = os.path.join(AUDIO_FOLDER, f'{slug}.mp3')
+    normalize_audio_step(slug, merged_path, word_count, voice_file)
 
 if __name__ == '__main__':
     import argparse
