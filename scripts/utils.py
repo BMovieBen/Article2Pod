@@ -46,6 +46,39 @@ def get_generation_logging_enabled():
     return bool(load_config().get('generation_logging_enabled', True))
 def get_chunk_word_count():
     return int(load_config().get('chunk_word_count', 1400))
+def get_audio_normalize_enabled():
+    return bool(load_config().get('audio_normalize_enabled', False))
+
+def normalize_audio(mp3_path):
+    """Run ffmpeg loudness normalization on mp3_path in place: dynaudnorm
+    followed by loudnorm targeting -16 LUFS (a common target for spoken-word
+    / podcast content). Writes to a temp file first and only replaces the
+    original on success, so a failed or interrupted run never leaves a
+    corrupt or partial file behind. Returns (ok, error_message) -- never
+    raises, so the caller can always fall back to the unnormalized file."""
+    import subprocess, shutil as _shutil
+    if not _shutil.which('ffmpeg'):
+        return False, 'ffmpeg not found on PATH.'
+
+    tmp_path = mp3_path + '.normalizing.tmp.mp3'
+    result = subprocess.run(
+        ['ffmpeg', '-y', '-i', mp3_path,
+         '-af', 'dynaudnorm,loudnorm=I=-16:TP=-1.5:LRA=11',
+         '-codec:a', 'libmp3lame', '-q:a', '2',
+         tmp_path],
+        capture_output=True, text=True
+    )
+
+    if result.returncode != 0 or not os.path.isfile(tmp_path):
+        if os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+        return False, result.stderr.strip()[-500:]
+
+    os.replace(tmp_path, mp3_path)
+    return True, ''
 
 def safe_slug(title, max_len=50):
     s = title.lower()
