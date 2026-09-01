@@ -50,20 +50,78 @@ def get_audio_normalize_enabled():
     return bool(load_config().get('audio_normalize_enabled', False))
 
 def normalize_audio(mp3_path):
-    """Run ffmpeg loudness normalization on mp3_path in place: dynaudnorm
-    followed by loudnorm targeting -16 LUFS (a common target for spoken-word
-    / podcast content). Writes to a temp file first and only replaces the
-    original on success, so a failed or interrupted run never leaves a
-    corrupt or partial file behind. Returns (ok, error_message) -- never
-    raises, so the caller can always fall back to the unnormalized file."""
-    import subprocess, shutil as _shutil
+    """Two-pass loudness normalization on mp3_path, in place.
+
+    Why two-pass: single-pass ("dynamic") loudnorm estimates gain in real
+    time with no knowledge of the file's actual peaks, and ffmpeg's own
+    docs flag it as unreliable for true-peak accuracy. In testing, the
+    single-pass version of this function landed 0.4dB hotter than its
+    configured -1.5dB ceiling on transient-heavy audio (a loud consonant
+    in otherwise quiet speech) -- exactly the kind of content VibeVoice
+    output contains, and exactly why highs were clipping while lows were
+    still being correctly boosted.
+
+    Pass 1 measures real loudness/peak stats. Pass 2 applies dynaudnorm
+    (tuned to compress dynamic range -- bring quiet passages up -- without
+    chasing already-loud passages toward the ceiling as hard as its
+    aggressive defaults do) followed by loudnorm using linear=true and the
+    real measured stats for an accurate correction, and a final brick-wall
+    alimiter as a safety net (level=false is required -- alimiter's default
+    auto-levels the output back toward 0dB after limiting, which silently
+    defeats the ceiling).
+
+    The -3.0dB target (rather than a more typical -1.5dB) is deliberate
+    headroom for MP3 encoding itself: lossy encoding can introduce
+    inter-sample "overs" above the pre-encode peak, confirmed in testing
+    with a -1.5dB target -- the encoded file measured back at +0.02dB
+    (i.e. clipped) even though the pre-encode PCM correctly held -1.5dB.
+
+    Returns (ok, error_message) -- never raises, so the caller can always
+    fall back to the unnormalized file.
+    """
+    import subprocess, shutil as _shutil, json as _json, re as _re
+
     if not _shutil.which('ffmpeg'):
         return False, 'ffmpeg not found on PATH.'
 
+    dynaudnorm      = 'dynaudnorm=f=500:g=15:p=0.75:m=8'
+    loudnorm_target = 'I=-16:TP=-3.0:LRA=11'
+
+    # --- Pass 1: measure -------------------------------------------------
+    # Must use the identical filter chain (dynaudnorm + loudnorm) as the
+    # apply pass below, since the measured stats are only valid for the
+    # exact signal loudnorm will see in pass 2.
+    measure = subprocess.run(
+        ['ffmpeg', '-i', mp3_path,
+         '-af', f'{dynaudnorm},loudnorm={loudnorm_target}:print_format=json',
+         '-f', 'null', '-'],
+        capture_output=True, text=True
+    )
+    match = _re.search(r'\{[^{}]*"input_i"[^{}]*\}', measure.stderr, _re.DOTALL)
+    if not match:
+        return False, ('Could not measure loudness stats (pass 1 failed): '
+                        + measure.stderr.strip()[-500:])
+    try:
+        stats = _json.loads(match.group(0))
+    except Exception as e:
+        return False, f'Could not parse loudness stats: {e}'
+
+    # --- Pass 2: apply accurate linear correction + safety limiter -------
     tmp_path = mp3_path + '.normalizing.tmp.mp3'
+    apply_filter = (
+        f'{dynaudnorm},'
+        f'loudnorm={loudnorm_target}:'
+        f'measured_I={stats["input_i"]}:'
+        f'measured_TP={stats["input_tp"]}:'
+        f'measured_LRA={stats["input_lra"]}:'
+        f'measured_thresh={stats["input_thresh"]}:'
+        f'offset={stats["target_offset"]}:'
+        f'linear=true,'
+        f'alimiter=limit=0.708:level=false:attack=5:release=50'
+    )
     result = subprocess.run(
         ['ffmpeg', '-y', '-i', mp3_path,
-         '-af', 'dynaudnorm,loudnorm=I=-16:TP=-1.5:LRA=11',
+         '-af', apply_filter,
          '-codec:a', 'libmp3lame', '-q:a', '2',
          tmp_path],
         capture_output=True, text=True
