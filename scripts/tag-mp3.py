@@ -13,6 +13,16 @@ INPUT_FOLDER    = get_input_folder()
 OUTPUT_DIR = get_output_dir()
 TRACK_LOG       = get_track_log()
 
+def safe_meta(meta, key, default):
+    """meta.get(key, default) only falls back when the key is missing —
+    if the key exists but its value is JSON null (Python None) or an
+    empty/whitespace string, get() still returns that falsy value as-is.
+    This normalizes both cases to a safe non-empty string."""
+    value = meta.get(key)
+    if value is None or not str(value).strip():
+        return default
+    return str(value)
+
 def load_track_log():
     if os.path.isfile(TRACK_LOG):
         with open(TRACK_LOG, 'r', encoding='utf-8') as f:
@@ -24,8 +34,8 @@ def save_track_log(log):
         json.dump(log, f, indent=2, ensure_ascii=False)
 
 def get_next_track(meta):
-    site   = meta.get('album',  'Unknown Site')
-    author = meta.get('artist', 'Unknown Author')
+    site   = safe_meta(meta, 'album',  'Unknown Site')
+    author = safe_meta(meta, 'artist', 'Unknown Author')
     log    = load_track_log()
     key    = f'{site}|{author}'
     next_track = log.get(key, 0) + 1
@@ -38,9 +48,10 @@ def tag_mp3(mp3_path, meta, art_path, track_number):
         tags = ID3(mp3_path)
     except ID3NoHeaderError:
         tags = ID3()
-    site   = meta.get('album',  '')
-    author = meta.get('artist', '')
-    tags.add(TIT2(encoding=3, text=meta.get('title', '')))
+    title  = safe_meta(meta, 'title',  'Untitled')
+    site   = safe_meta(meta, 'album',  'Unknown Site')
+    author = safe_meta(meta, 'artist', 'Unknown Author')
+    tags.add(TIT2(encoding=3, text=title))
     tags.add(TPE1(encoding=3, text=site))
     tags.add(TPE2(encoding=3, text=site))
     tags.add(TALB(encoding=3, text=author))
@@ -52,9 +63,9 @@ def tag_mp3(mp3_path, meta, art_path, track_number):
     tags.save(mp3_path)
 
 def move_mp3(mp3_path, slug, meta):
-    site   = meta.get('album',  'Unknown Site')
-    author = meta.get('artist', 'Unknown Author')
-    title  = meta.get('title',  'Untitled')
+    site   = safe_meta(meta, 'album',  'Unknown Site')
+    author = safe_meta(meta, 'artist', 'Unknown Author')
+    title  = safe_meta(meta, 'title',  'Untitled')
 
     site_part  = sanitize_filename(site)
     safe_title = sanitize_filename(title)
@@ -86,9 +97,9 @@ def main(slug):
     track_number = get_next_track(meta)
 
     print(f'  File:       {slug}.mp3')
-    print(f'  Title:      {meta.get("title")}')
-    print(f'  Artist:     {meta.get("album")}')
-    print(f'  Album:      {meta.get("artist")}')
+    print(f'  Title:      {safe_meta(meta, "title", "Untitled")}')
+    print(f'  Artist:     {safe_meta(meta, "album", "Unknown Site")}')
+    print(f'  Album:      {safe_meta(meta, "artist", "Unknown Author")}')
     print(f'  Art:        {art_path if os.path.isfile(art_path) else "none"}')
     print(f'  Track:      {track_number}')
 
