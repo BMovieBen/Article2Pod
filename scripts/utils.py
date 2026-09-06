@@ -1,7 +1,7 @@
 # utils.py
 # Shared utilities for the Article to Podcast pipeline
 
-import re, json, os
+import re, json, os, csv, datetime
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from readability import Document
@@ -48,6 +48,130 @@ def get_chunk_word_count():
     return int(load_config().get('chunk_word_count', 1400))
 def get_audio_normalize_enabled():
     return bool(load_config().get('audio_normalize_enabled', False))
+
+def get_art_sources():
+    """Stack-ranked list of art sources to try, in order. Recognized
+    values: 'website' (og:image), 'image_search' (DDGS), 'comfyui_generate'
+    (ComfyUI text-to-image, generated during processing not at add-time),
+    'favicon' (Google favicon), 'default' (default_art.jpg), 'none' (stop
+    -- no art at all, skip APIC tag entirely). Unrecognized values are
+    ignored rather than raising, so a typo in config degrades gracefully
+    instead of crashing metadata fetch."""
+    return load_config().get(
+        'art_sources',
+        ['website', 'image_search', 'comfyui_generate', 'favicon', 'default']
+    )
+
+def get_art_workflow_file():
+    path = load_config().get('art_workflow_file')
+    return os.path.join(APP_DIR, path) if path else None
+
+def get_art_prompt_node_title():
+    return load_config().get('art_prompt_node_title', '')
+
+def get_art_save_node_class():
+    return load_config().get('art_save_node_class', 'SaveImage')
+
+def get_art_generation_timeout():
+    return int(load_config().get('art_generation_timeout', 300))
+
+def get_comfy_shared_models_paths():
+    """Returns a list of shared model root directories to scan and
+    register with ComfyUI. Accepts either a single path (string, for
+    backward compatibility) or a list of paths in config -- multiple
+    physically separate model directories are common with Comfy Desktop
+    (e.g. an install's own models folder AND Desktop's separate Shared
+    Directories folder are not the same location)."""
+    value = load_config().get('comfy_shared_models_path')
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return list(value)
+
+def get_comfy_extra_custom_nodes_path():
+    return load_config().get('comfy_extra_custom_nodes_path')
+
+def get_extra_model_paths_file():
+    return os.path.join(APP_DIR, 'extra_model_paths.yaml')
+
+def get_comfyui_console_log_path():
+    log_dir = os.path.join(APP_DIR, 'log')
+    os.makedirs(log_dir, exist_ok=True)
+    return os.path.join(log_dir, 'comfyui-console.log')
+
+def build_extra_model_paths_yaml():
+    """Regenerate extra_model_paths.yaml from two independent, optional
+    sources -- comfy_shared_models_path (one or more Comfy Desktop model
+    directories, each scanned for whatever subfolders currently exist)
+    and comfy_extra_custom_nodes_path (a second ComfyUI install's
+    custom_nodes folder, e.g. one with Krea2-enabling nodes installed
+    that the self-launched instance under comfy_base doesn't have).
+    Comfy Desktop manages these internally via its Electron wrapper and
+    no longer writes the legacy extra_models_config.yaml a self-launched
+    instance would need to see them -- so we maintain our own, rebuilt
+    fresh on every launch. Returns the yaml path, or None if nothing is
+    configured/found (caller should skip the --extra-model-paths-config
+    flag entirely in that case)."""
+    sections = []
+
+    for i, shared_path in enumerate(get_comfy_shared_models_paths()):
+        if not shared_path or not os.path.isdir(shared_path):
+            continue
+        subfolders = sorted(
+            d for d in os.listdir(shared_path)
+            if os.path.isdir(os.path.join(shared_path, d))
+        )
+        if not subfolders:
+            continue
+        # Single-quoted YAML scalars keep Windows backslashes literal --
+        # double quotes would treat them as escape sequences. Section
+        # names are numbered since there can be more than one now.
+        lines = [f'comfyui_shared_{i}:', f"    base_path: '{shared_path}'"]
+        for name in subfolders:
+            lines.append(f'    {name}: {name}')
+        sections.append('\n'.join(lines))
+
+    custom_nodes_path = get_comfy_extra_custom_nodes_path()
+    if custom_nodes_path and os.path.isdir(custom_nodes_path):
+        sections.append(
+            'comfyui_extra_custom_nodes:\n'
+            f"    custom_nodes: '{custom_nodes_path}'"
+        )
+
+    if not sections:
+        return None
+
+    yaml_path = get_extra_model_paths_file()
+    with open(yaml_path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(sections) + '\n')
+    return yaml_path
+
+def get_generation_log_path():
+    log_dir = os.path.join(APP_DIR, 'log')
+    os.makedirs(log_dir, exist_ok=True)
+    return os.path.join(log_dir, 'generation-log.csv')
+
+def log_generation(slug, word_count, voice_file, status, duration, detail=''):
+    """Append one row per generation attempt (audio or art) to
+    generation-log.csv. Shared by generate-audio.py and generate-art.py
+    so both write to the same log instead of each keeping its own copy
+    of this function. No-ops if generation_logging_enabled is false."""
+    if not get_generation_logging_enabled():
+        return
+    log_path = get_generation_log_path()
+    is_new   = not os.path.isfile(log_path)
+    with open(log_path, 'a', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        if is_new:
+            writer.writerow(['timestamp', 'slug', 'word_count', 'voice',
+                             'status', 'duration_seconds', 'detail'])
+        writer.writerow([
+            datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            slug, word_count, voice_file, status,
+            f'{duration:.1f}', detail,
+        ])
+    print(f'  Logged:   {status} in {duration:.1f}s -> {log_path}')
 
 def normalize_audio(mp3_path):
     """Two-pass loudness normalization on mp3_path, in place.

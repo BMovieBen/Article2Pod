@@ -225,9 +225,10 @@ def finish_add(slug, url, mode, fetch_output):
         'source_url':    url,
         'error':         None,
         'added_at':      time.time(),
-        'pipeline_type': pipeline_type,
-        'voice':         voice_override,
-        'fetch_output':  (fetch_output + '\n' + meta_out).strip(),
+        'pipeline_type':        pipeline_type,
+        'voice':                voice_override,
+        'art_pending_comfyui':  meta.get('art_pending_comfyui', False),
+        'fetch_output':         (fetch_output + '\n' + meta_out).strip(),
     }
 
     with queue_lock:

@@ -5,13 +5,15 @@ import os, sys, json, time, shutil, subprocess, threading
 import requests
 from utils import (
     load_config, get_comfy_url, get_temp_folder,
-    get_input_folder, get_audio_folder
+    get_input_folder, get_audio_folder, build_extra_model_paths_yaml,
+    get_comfyui_console_log_path
 )
 from queue_manager import queue_lock, load_queue, save_queue, delete_temp_files
 
 processing            = False
 stop_requested        = False
 comfy_process         = None
+comfy_log_file        = None   # open file handle for ComfyUI's own console output
 current_slug          = None
 current_pipeline_type = None   # pipeline_type of the in-flight item, set by process_queue
 comfy_interrupt_error = None   # set if /interrupt fails, surfaced to the UI
@@ -25,17 +27,15 @@ def is_comfyui_running():
         return False
 
 def start_comfyui():
-    global comfy_process
+    global comfy_process, comfy_log_file
     config        = load_config()
     comfy_url     = get_comfy_url()
     comfy_base    = config['comfy_base']
     local_appdata = os.environ.get('LOCALAPPDATA', '')
-    appdata       = os.environ.get('APPDATA', '')
     electron_rel  = config['comfy_electron_relative']
     main_py       = os.path.join(local_appdata, electron_rel, 'main.py')
     front_end     = os.path.join(local_appdata, electron_rel,
                                  'web_custom_versions', 'desktop_app')
-    extra_models  = os.path.join(appdata, 'ComfyUI', 'extra_models_config.yaml')
     port          = comfy_url.split(':')[-1]
 
     args = [
@@ -43,17 +43,45 @@ def start_comfyui():
         '--user-directory',           os.path.join(comfy_base, 'user'),
         '--input-directory',          config['input_folder'],
         '--output-directory',         config['output_folder'],
-        '--front-end-root',           front_end,
         '--base-directory',           comfy_base,
         '--database-url',
             f"sqlite:///{comfy_base.replace(chr(92), '/')}/user/comfyui.db",
-        '--extra-model-paths-config', extra_models,
         '--log-stdout', '--listen', '127.0.0.1',
         '--port', port, '--enable-manager', '--preview-method', 'auto',
     ]
+
+    # web_custom_versions/desktop_app only exists in the older Electron-
+    # bundled install layout, which shipped a custom frontend build there.
+    # Standalone/uv-based installs don't have it and serve ComfyUI's own
+    # default frontend automatically -- so only pass --front-end-root when
+    # that folder actually exists, rather than assuming either layout.
+    if os.path.isdir(front_end):
+        args += ['--front-end-root', front_end]
+    else:
+        print(f'[Article2Pod] No desktop_app frontend at {front_end} -- '
+              f'using ComfyUI\'s default frontend instead.')
+
+    # Comfy Desktop's own extra_models_config.yaml (under %APPDATA%\ComfyUI)
+    # is stale/legacy -- it predates Desktop's newer Shared Directories
+    # feature and was never updated to reference it. We maintain our own
+    # instead, regenerated fresh on every launch from whatever subfolders
+    # currently exist under comfy_shared_models_path, so a self-launched
+    # instance can see Desktop-managed shared models (e.g. Krea2) without
+    # depending on a file we don't control.
+    extra_models_yaml = build_extra_model_paths_yaml()
+    if extra_models_yaml:
+        print(f'[Article2Pod] Shared model paths: {extra_models_yaml}')
+        args += ['--extra-model-paths-config', extra_models_yaml]
+    else:
+        print('[Article2Pod] No comfy_shared_models_path configured or '
+              'found -- only comfy_base models will be visible.')
+
+    log_path      = get_comfyui_console_log_path()
+    comfy_log_file = open(log_path, 'w', encoding='utf-8', errors='replace')
+    print(f'[Article2Pod] ComfyUI console output: {log_path}')
     comfy_process = subprocess.Popen(args, cwd=comfy_base,
-                                     stdout=subprocess.DEVNULL,
-                                     stderr=subprocess.DEVNULL)
+                                     stdout=comfy_log_file,
+                                     stderr=subprocess.STDOUT)
     timeout = config.get('comfy_startup_timeout', 120)
     elapsed = 0
     while elapsed < timeout:
@@ -64,7 +92,7 @@ def start_comfyui():
     return False
 
 def stop_comfyui():
-    global comfy_process
+    global comfy_process, comfy_log_file
     try:
         requests.post(f'{get_comfy_url()}/manager/reboot', timeout=3)
         time.sleep(2)
@@ -76,6 +104,12 @@ def stop_comfyui():
             comfy_process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             comfy_process.kill()
+    if comfy_log_file:
+        try:
+            comfy_log_file.close()
+        except Exception:
+            pass
+        comfy_log_file = None
     comfy_process = None
 
 def interrupt_comfyui():
@@ -146,6 +180,22 @@ def process_single(slug):
         ok, out, _ = run_script(*gen_args)
         if not ok:
             return False, f'generate-audio failed:\n{out}'
+
+        # Optional ComfyUI-generated album art. Best-effort -- failure
+        # here never fails the item; the fallback art fetch-metadata
+        # already wrote to temp/{slug}.jpg is left in place for tag-mp3.
+        if item and item.get('art_pending_comfyui'):
+            print(f'[Article2Pod] Attempting ComfyUI art generation for {slug}...')
+            ok_art, out_art, _ = run_script('generate-art.py', slug)
+            if ok_art:
+                print(f'[Article2Pod] Art generation succeeded for {slug}.')
+            else:
+                print(f'[Article2Pod] Art generation failed for {slug}, '
+                      f'using fallback art:\n{out_art}')
+        else:
+            print(f'[Article2Pod] No ComfyUI art pending for {slug} '
+                  f'(item found: {item is not None}, '
+                  f'art_pending_comfyui: {item.get("art_pending_comfyui") if item else "n/a"}).')
 
     ok, out, _ = run_script('tag-mp3.py', slug)
     if not ok:

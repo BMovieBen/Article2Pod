@@ -11,7 +11,7 @@ from ddgs import DDGS
 from utils import (
     safe_slug, get_title, get_author, get_site_name,
     get_temp_folder, get_input_folder, APP_DIR,
-    get_domain_override, resolve_domain
+    get_domain_override, resolve_domain, get_art_sources
 )
 
 INPUT_FOLDER = get_input_folder()
@@ -69,54 +69,33 @@ def search_image(query):
         print(f'  [Debug] DDG search error: {e}')
     return None
 
-def get_article_image(url, soup, title='', site_hint=''):
-    """
-    Try to get album art in order:
-    0. Domain override art_path (config domain_overrides) — skips scraping entirely
-    1. OG image tag
-    2. DuckDuckGo image search on title
-    3. Google Favicon
-    4. Default art fallback
-    """
-    # 0. Domain override — bypasses scraping if configured for this site
-    override = get_domain_override(url, site_hint)
-    if override and override.get('art_path'):
-        art_path_cfg = override['art_path']
-        if os.path.isfile(art_path_cfg):
-            try:
-                print(f'  Art: using domain override image ({art_path_cfg})')
-                return Image.open(art_path_cfg).convert('RGB')
-            except Exception as e:
-                print(f'  Art: failed to load domain override image: {e}')
-        else:
-            print(f'  Art: domain override art_path not found: {art_path_cfg}')
-
-    # 1. OG image
+def _art_from_website(soup):
     og = soup.find('meta', property='og:image')
     if og and og.get('content'):
-        img = fetch_and_resize_image(og['content'])
-        if img:
-            return img
+        return fetch_and_resize_image(og['content'])
+    return None
 
-    # 2. Image search — strip site name suffix from title for cleaner query
-    if title:
-        clean_title = title.split(' | ')[0].split(' - ')[0].split(' — ')[0].strip()
-        print(f'  Art: searching for "{clean_title[:50]}"')
-        img = search_image(clean_title)
-        if img:
-            print('  Art: found via image search')
-            return img
+def _art_from_search(title):
+    if not title:
+        return None
+    clean_title = title.split(' | ')[0].split(' - ')[0].split(' — ')[0].strip()
+    print(f'  Art: searching for "{clean_title[:50]}"')
+    img = search_image(clean_title)
+    if img:
+        print('  Art: found via image search')
+    return img
 
-    # 3. Google Favicon — use url domain or site_hint from clipboard
+def _art_from_favicon(url, site_hint):
     domain = resolve_domain(url, site_hint)
-    if domain:
-        img = fetch_and_resize_image(
-            f'https://www.google.com/s2/favicons?sz=128&domain={domain}')
-        if img:
-            print(f'  Art: using Google Favicon for {domain}')
-            return img
+    if not domain:
+        return None
+    img = fetch_and_resize_image(
+        f'https://www.google.com/s2/favicons?sz=128&domain={domain}')
+    if img:
+        print(f'  Art: using Google Favicon for {domain}')
+    return img
 
-    # 4. Default art fallback
+def _art_from_default():
     default_art = os.path.join(APP_DIR, 'default_art.jpg')
     if os.path.isfile(default_art):
         print('  Art: using default_art.jpg')
@@ -125,6 +104,57 @@ def get_article_image(url, soup, title='', site_hint=''):
         except Exception as e:
             print(f'  Art: failed to load default_art.jpg: {e}')
     return None
+
+def get_article_image(url, soup, title='', site_hint=''):
+    """
+    Returns (image, art_pending_comfyui).
+
+    0. Domain override art_path (config domain_overrides) — hard bypass,
+       always wins regardless of art_sources ranking (unchanged behavior).
+    Then walks get_art_sources() in configured order. 'comfyui_generate'
+    can't run here — ComfyUI usually isn't running at add-time — so it just
+    reserves its rank and keeps walking for a fallback image to show in the
+    queue meanwhile. If a higher-ranked source succeeds first, the loop
+    returns before comfyui_generate is ever reached, so generation is
+    skipped entirely later (no wasted VRAM cycle). 'none' stops the walk
+    with no image at all.
+    """
+    # 0. Domain override — bypasses scraping if configured for this site
+    override = get_domain_override(url, site_hint)
+    if override and override.get('art_path'):
+        art_path_cfg = override['art_path']
+        if os.path.isfile(art_path_cfg):
+            try:
+                print(f'  Art: using domain override image ({art_path_cfg})')
+                return Image.open(art_path_cfg).convert('RGB'), False
+            except Exception as e:
+                print(f'  Art: failed to load domain override image: {e}')
+        else:
+            print(f'  Art: domain override art_path not found: {art_path_cfg}')
+
+    art_pending_comfyui = False
+    for src in get_art_sources():
+        if src == 'none':
+            break
+        if src == 'comfyui_generate':
+            art_pending_comfyui = True
+            print('  Art: ComfyUI generation slot reserved (will run at processing time)')
+            continue
+
+        img = None
+        if src == 'website':
+            img = _art_from_website(soup)
+        elif src == 'image_search':
+            img = _art_from_search(title)
+        elif src == 'favicon':
+            img = _art_from_favicon(url, site_hint)
+        elif src == 'default':
+            img = _art_from_default()
+
+        if img:
+            return img, art_pending_comfyui
+
+    return None, art_pending_comfyui
 
 def find_embedded_audio(soup, url):
     """Look for an embedded MP3 URL in the page DOM."""
@@ -268,18 +298,24 @@ def fetch_metadata(url):
                            'audio_url': audio_url}, f)
             print(f'  Audio:      embedded MP3 found, will download directly.')
 
-    img      = get_article_image(url, full_soup, title=title, site_hint=site_name)
-    art_path = os.path.join(TEMP_FOLDER, f'{slug}.jpg')
-    img.save(art_path, 'JPEG', quality=90)
-    print(f'  Art saved:  {art_path}')
+    img, art_pending_comfyui = get_article_image(
+        url, full_soup, title=title, site_hint=site_name)
+    art_path = None
+    if img:
+        art_path = os.path.join(TEMP_FOLDER, f'{slug}.jpg')
+        img.save(art_path, 'JPEG', quality=90)
+        print(f'  Art saved:  {art_path}')
+    else:
+        print('  Art:        none')
 
     meta = {
-        'title':      title,
-        'artist':     author,
-        'album':      site_name,
-        'album_art':  art_path,
-        'slug':       slug,
-        'source_url': url,
+        'title':                title,
+        'artist':               author,
+        'album':                site_name,
+        'album_art':            art_path,
+        'art_pending_comfyui':  art_pending_comfyui,
+        'slug':                 slug,
+        'source_url':           url,
     }
     json_path = os.path.join(TEMP_FOLDER, f'{slug}.json')
     with open(json_path, 'w', encoding='utf-8') as f:
@@ -288,6 +324,7 @@ def fetch_metadata(url):
     print(f'  Title:      {title}')
     print(f'  Author:     {author}')
     print(f'  Site:       {site_name}')
+    print(f'  Art pending (ComfyUI): {art_pending_comfyui}')
     print(f'  Meta saved: {json_path}')
     return slug
 
