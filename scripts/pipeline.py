@@ -112,6 +112,97 @@ def stop_comfyui():
         comfy_log_file = None
     comfy_process = None
 
+manual_comfy_op = None  # None | 'starting' | 'stopping' -- guards the
+                         # on-demand UI button against overlapping clicks
+
+def start_comfyui_manual():
+    """Start ComfyUI on demand, outside of queue processing (e.g. to use
+    it for something else in the ComfyUI UI directly). Runs in a
+    background thread since start_comfyui() blocks for up to
+    comfy_startup_timeout -- returns immediately; poll get_comfyui_status()
+    for the actual result. Returns (ok, error)."""
+    global manual_comfy_op
+    if processing:
+        return False, 'Cannot start ComfyUI while the queue is processing.'
+    if manual_comfy_op:
+        return False, f'A ComfyUI {manual_comfy_op} operation is already in progress.'
+    if is_comfyui_running():
+        return False, 'ComfyUI is already running.'
+
+    manual_comfy_op = 'starting'
+    def _run():
+        global manual_comfy_op
+        print('[Article2Pod] Starting ComfyUI...')
+        try:
+            if start_comfyui():
+                print('[Article2Pod] ComfyUI ready.')
+            else:
+                print('[Article2Pod] ComfyUI failed to start.')
+        finally:
+            manual_comfy_op = None
+    threading.Thread(target=_run, daemon=True).start()
+    return True, None
+
+def stop_comfyui_manual():
+    """Stop a manually-started (or otherwise already-running) ComfyUI
+    instance on demand. Refuses while the queue is actively processing,
+    so a manual click can't pull ComfyUI out from under an in-flight
+    generation. Returns (ok, error)."""
+    global manual_comfy_op
+    if processing:
+        return False, 'Cannot stop ComfyUI while the queue is processing.'
+    if manual_comfy_op:
+        return False, f'A ComfyUI {manual_comfy_op} operation is already in progress.'
+    if not is_comfyui_running():
+        return False, 'ComfyUI is not running.'
+
+    manual_comfy_op = 'stopping'
+    def _run():
+        global manual_comfy_op
+        print('[Article2Pod] Stopping ComfyUI...')
+        try:
+            stop_comfyui()
+            print('[Article2Pod] ComfyUI shut down.')
+        finally:
+            manual_comfy_op = None
+    threading.Thread(target=_run, daemon=True).start()
+    return True, None
+
+def get_comfyui_status():
+    return {
+        'running':   is_comfyui_running(),
+        'manual_op': manual_comfy_op,
+    }
+
+def free_comfyui_memory():
+    """Ask ComfyUI to unload models and free VRAM/RAM -- the same /free
+    call generate-art.py already makes between VibeVoice and image
+    generation, exposed here too so it can be triggered on demand from
+    the UI independent of the art pipeline. Returns True/False; fast
+    enough to call synchronously from a Flask route, no thread needed."""
+    try:
+        r = requests.post(f'{get_comfy_url()}/free',
+                          json={'unload_models': True, 'free_memory': True},
+                          timeout=10)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+def free_comfyui_memory_manual():
+    """On-demand memory free triggered from the UI. Returns (ok, error)."""
+    if processing:
+        return False, 'Cannot free ComfyUI memory while the queue is processing.'
+    if manual_comfy_op:
+        return False, f'A ComfyUI {manual_comfy_op} operation is already in progress.'
+    if not is_comfyui_running():
+        return False, 'ComfyUI is not running.'
+
+    print('[Article2Pod] Freeing ComfyUI memory...')
+    ok = free_comfyui_memory()
+    print('[Article2Pod] ComfyUI memory freed.' if ok
+          else '[Article2Pod] Failed to free ComfyUI memory.')
+    return (True, None) if ok else (False, 'Failed to free ComfyUI memory (see console).')
+
 def interrupt_comfyui():
     """Cancel the in-flight ComfyUI prompt via the /interrupt endpoint.
     Returns True on success, False if the request itself fails (network
@@ -216,18 +307,9 @@ def process_queue():
 
     comfyui_started = False
     if needs_comfyui:
-        if is_comfyui_running():
-            with queue_lock:
-                q = load_queue()
-                for item in q:
-                    if item['status'] == 'pending':
-                        item['status'] = 'failed'
-                        item['error']  = 'ComfyUI is already running. Please close it first.'
-                save_queue(q)
-            processing = False
-            return
-
-        # Mark first pending item as processing immediately so UI shows spinner
+        # Mark first pending item as processing immediately so UI shows
+        # spinner, whether we're about to start ComfyUI ourselves or reuse
+        # one that's already running.
         with queue_lock:
             q       = load_queue()
             pending = [i for i in q if i['status'] == 'pending']
@@ -237,23 +319,28 @@ def process_queue():
                 current_pipeline_type = pending[0].get('pipeline_type', 'comfyui')
                 save_queue(q)
 
-        print('[Article2Pod] Starting ComfyUI...')
-        if not start_comfyui():
-            with queue_lock:
-                q = load_queue()
-                for item in q:
-                    if item['status'] in ('pending', 'processing'):
-                        item['status'] = 'failed'
-                        item['error']  = 'ComfyUI failed to start.'
-                save_queue(q)
-            processing            = False
-            current_slug          = None
-            current_pipeline_type = None
-            return
+        if is_comfyui_running():
+            print('[Article2Pod] ComfyUI already running -- reusing existing instance.')
+            # comfyui_started stays False: the queue didn't start it, so
+            # it won't be responsible for stopping it once the run finishes.
+        else:
+            print('[Article2Pod] Starting ComfyUI...')
+            if not start_comfyui():
+                with queue_lock:
+                    q = load_queue()
+                    for item in q:
+                        if item['status'] in ('pending', 'processing'):
+                            item['status'] = 'failed'
+                            item['error']  = 'ComfyUI failed to start.'
+                    save_queue(q)
+                processing            = False
+                current_slug          = None
+                current_pipeline_type = None
+                return
 
-        print('[Article2Pod] ComfyUI ready.')
-        comfyui_started = True
-        # Leave first item as 'processing' — main loop picks it up naturally
+            print('[Article2Pod] ComfyUI ready.')
+            comfyui_started = True
+            # Leave first item as 'processing' — main loop picks it up naturally
 
     try:
         while True:

@@ -18,7 +18,9 @@ from queue_manager import (
 )
 from pipeline import (
     is_comfyui_running, get_state,
-    start_processing, request_stop
+    start_processing, request_stop,
+    start_comfyui_manual, stop_comfyui_manual, get_comfyui_status,
+    free_comfyui_memory_manual
 )
 from web_pipeline import (
     run_script, _should_switch_to_text,
@@ -386,6 +388,31 @@ def api_queue_voice():
         save_queue(q)
 
     print(f'[Article2Pod] Voice for {slug} set to: {voice or "default"}')
+    return jsonify({'ok': True})
+
+@app.route('/api/comfyui/status', methods=['GET'])
+def api_comfyui_status():
+    return jsonify(get_comfyui_status())
+
+@app.route('/api/comfyui/start', methods=['POST'])
+def api_comfyui_start():
+    ok, error = start_comfyui_manual()
+    if not ok:
+        return jsonify({'error': error}), 400
+    return jsonify({'ok': True})
+
+@app.route('/api/comfyui/stop', methods=['POST'])
+def api_comfyui_stop():
+    ok, error = stop_comfyui_manual()
+    if not ok:
+        return jsonify({'error': error}), 400
+    return jsonify({'ok': True})
+
+@app.route('/api/comfyui/free', methods=['POST'])
+def api_comfyui_free():
+    ok, error = free_comfyui_memory_manual()
+    if not ok:
+        return jsonify({'error': error}), 400
     return jsonify({'ok': True})
 
 # ============================================================

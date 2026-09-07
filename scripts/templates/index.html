@@ -668,6 +668,14 @@
     <button class="btn-save" id="saveDefaultVoice"
             onclick="saveDefaultVoice()" disabled>Save</button>
   </div>
+  <div class="settings-row" style="margin-top:12px;">
+    <span class="settings-label">ComfyUI</span>
+    <span id="comfyStatusText" style="font-size:12px;color:var(--muted);flex:1;">Checking...</span>
+    <button class="btn-save" id="comfyFreeBtn"
+            onclick="freeComfyMemory()" disabled>Free Memory</button>
+    <button class="btn-save" id="comfyToggleBtn"
+            onclick="toggleComfyUI()" disabled>...</button>
+  </div>
 </div>
 
 <main>
@@ -749,6 +757,7 @@
   let libraryHasMore = false;
   let confirmingLibPath = null;
   let settingsOpen    = false;
+  let comfyStatusPollTimer = null;  // self-terminating: only reschedules while settingsOpen
   let voicesCache     = null;   // cached voice list
   let voicePanelOpenCount = 0;
   let defaultVoice    = '';     // current default from config
@@ -818,6 +827,8 @@
       ).join('');
       document.getElementById('saveDefaultVoice').disabled = true;
       pendingDefault = defaultVoice;
+
+      pollComfyStatus();  // starts a self-terminating poll loop while the panel is open
     }
   }
 
@@ -845,6 +856,97 @@
     } else {
       showError('Could not save default voice.');
     }
+  }
+
+  function updateComfyStatusUI(data) {
+    const textEl  = document.getElementById('comfyStatusText');
+    const btn     = document.getElementById('comfyToggleBtn');
+    const freeBtn = document.getElementById('comfyFreeBtn');
+
+    if (data.manual_op === 'starting') {
+      textEl.textContent = 'Starting...';
+      btn.textContent    = 'Starting...';
+      btn.disabled       = true;
+      freeBtn.disabled   = true;
+    } else if (data.manual_op === 'stopping') {
+      textEl.textContent = 'Stopping...';
+      btn.textContent    = 'Stopping...';
+      btn.disabled       = true;
+      freeBtn.disabled   = true;
+    } else if (data.running) {
+      textEl.textContent = 'Running';
+      btn.textContent    = 'Stop';
+      btn.disabled       = false;
+      freeBtn.disabled   = false;
+    } else {
+      textEl.textContent = 'Stopped';
+      btn.textContent    = 'Start';
+      btn.disabled       = false;
+      freeBtn.disabled   = true;  // nothing to free if it isn't running
+    }
+  }
+
+  async function pollComfyStatus() {
+    if (comfyStatusPollTimer) {
+      clearTimeout(comfyStatusPollTimer);
+      comfyStatusPollTimer = null;
+    }
+    if (!settingsOpen) return;  // panel closed -- stop the loop here
+
+    try {
+      const res  = await fetch('/api/comfyui/status');
+      const data = await res.json();
+      updateComfyStatusUI(data);
+    } catch (e) {
+      document.getElementById('comfyStatusText').textContent = 'Unknown';
+    }
+
+    comfyStatusPollTimer = setTimeout(pollComfyStatus, 3000);
+  }
+
+  async function toggleComfyUI() {
+    const btn     = document.getElementById('comfyToggleBtn');
+    const freeBtn = document.getElementById('comfyFreeBtn');
+    const action  = btn.textContent === 'Stop' ? 'stop' : 'start';
+
+    // Immediate optimistic update, same pattern as Generate/Stop --
+    // don't wait for the network round trip to disable/relabel.
+    btn.disabled     = true;
+    btn.textContent  = action === 'start' ? 'Starting...' : 'Stopping...';
+    freeBtn.disabled = true;
+
+    try {
+      const res  = await fetch(`/api/comfyui/${action}`, {method: 'POST'});
+      const data = await res.json();
+      if (!res.ok) {
+        showError(data.error || `Could not ${action} ComfyUI.`);
+      }
+    } catch (e) {
+      showError(`Could not ${action} ComfyUI.`);
+    }
+
+    pollComfyStatus();  // reconcile with real state either way
+  }
+
+  async function freeComfyMemory() {
+    const btn = document.getElementById('comfyFreeBtn');
+    btn.disabled    = true;
+    btn.textContent = 'Freeing...';
+
+    try {
+      const res  = await fetch('/api/comfyui/free', {method: 'POST'});
+      const data = await res.json();
+      if (!res.ok) {
+        showError(data.error || 'Could not free ComfyUI memory.');
+      } else {
+        btn.textContent = 'Freed!';
+        setTimeout(() => { btn.textContent = 'Free Memory'; }, 1500);
+      }
+    } catch (e) {
+      showError('Could not free ComfyUI memory.');
+    }
+
+    pollComfyStatus();  // reconciles freeBtn.disabled with real state
   }
 
   async function populateVoiceSelect(selectId, currentVoice, show) {
