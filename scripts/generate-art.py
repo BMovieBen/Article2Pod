@@ -11,7 +11,8 @@ import requests
 from utils import (
     get_comfy_url, get_art_workflow_file, get_art_prompt_node_title,
     get_art_save_node_class, get_art_generation_timeout,
-    get_temp_folder, get_output_folder, log_generation
+    get_temp_folder, get_output_folder, log_generation,
+    free_comfyui_memory as _free_comfyui_memory
 )
 from art_prompt import build_art_prompt
 
@@ -24,14 +25,13 @@ def free_comfyui_memory():
     case is a slower/more contended run, not a crash). Called both before
     generation (unloads VibeVoice so the image model has room) and after
     (unloads the image model so VibeVoice has room again for the next
-    queue item)."""
-    try:
-        requests.post(f'{COMFY_URL}/free',
-                      json={'unload_models': True, 'free_memory': True},
-                      timeout=10)
-        print('  Freed ComfyUI memory.')
-    except Exception as e:
-        print(f'  Could not free ComfyUI memory (continuing anyway): {e}')
+    queue item). The actual HTTP call is shared with pipeline.py's
+    on-demand Free Memory button, in utils.py; this wraps it with this
+    script's own logging style."""
+    ok = _free_comfyui_memory(COMFY_URL)
+    print('  Freed ComfyUI memory.' if ok
+          else '  Could not free ComfyUI memory (continuing anyway).')
+    return ok
 
 def load_workflow():
     path = get_art_workflow_file()

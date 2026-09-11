@@ -278,9 +278,12 @@
   .card-title {
     font-size: 14px;
     font-weight: 600;
-    white-space: nowrap;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
     overflow: hidden;
     text-overflow: ellipsis;
+    word-break: break-word;
     margin-bottom: 2px;
   }
 
@@ -316,6 +319,16 @@
   .btn-icon:hover {
     color: var(--text);
     border-color: var(--text);
+  }
+
+  .btn-icon:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .btn-icon:disabled:hover {
+    color: var(--muted);
+    border-color: var(--border);
   }
 
   .btn-icon.danger:hover {
@@ -671,8 +684,11 @@
   <div class="settings-row" style="margin-top:12px;">
     <span class="settings-label">ComfyUI</span>
     <span id="comfyStatusText" style="font-size:12px;color:var(--muted);flex:1;">Checking...</span>
-    <button class="btn-save" id="comfyFreeBtn"
-            onclick="freeComfyMemory()" disabled>Free Memory</button>
+    <button class="btn-icon" id="comfyFreeBtn"
+            onclick="freeComfyMemory()" disabled
+            title="Free ComfyUI memory (unload models)">
+      <i class="fa-solid fa-recycle"></i>
+    </button>
     <button class="btn-save" id="comfyToggleBtn"
             onclick="toggleComfyUI()" disabled>...</button>
   </div>
@@ -758,6 +774,7 @@
   let confirmingLibPath = null;
   let settingsOpen    = false;
   let comfyStatusPollTimer = null;  // self-terminating: only reschedules while settingsOpen
+  let comfyOpInFlight  = false;     // guards start/stop clicks independent of DOM disabled state
   let voicesCache     = null;   // cached voice list
   let voicePanelOpenCount = 0;
   let defaultVoice    = '';     // current default from config
@@ -878,11 +895,13 @@
       btn.textContent    = 'Stop';
       btn.disabled       = false;
       freeBtn.disabled   = false;
+      comfyOpInFlight     = false;  // resolved -- safe to accept another click
     } else {
       textEl.textContent = 'Stopped';
       btn.textContent    = 'Start';
       btn.disabled       = false;
       freeBtn.disabled   = true;  // nothing to free if it isn't running
+      comfyOpInFlight     = false;
     }
   }
 
@@ -905,6 +924,15 @@
   }
 
   async function toggleComfyUI() {
+    // Guards against a second click firing during the starting/stopping
+    // window -- checked independently of the button's disabled attribute
+    // as a belt-and-suspenders measure, and persists correctly across
+    // settings-panel close/reopen since it's only ever cleared once
+    // polling confirms the operation actually resolved (see
+    // updateComfyStatusUI), not on a timer or on panel close.
+    if (comfyOpInFlight) return;
+    comfyOpInFlight = true;
+
     const btn     = document.getElementById('comfyToggleBtn');
     const freeBtn = document.getElementById('comfyFreeBtn');
     const action  = btn.textContent === 'Stop' ? 'stop' : 'start';
@@ -920,9 +948,13 @@
       const data = await res.json();
       if (!res.ok) {
         showError(data.error || `Could not ${action} ComfyUI.`);
+        comfyOpInFlight = false;  // failed immediately -- allow retry right away
       }
+      // On success, comfyOpInFlight stays true until polling confirms the
+      // background start/stop actually finished.
     } catch (e) {
       showError(`Could not ${action} ComfyUI.`);
+      comfyOpInFlight = false;
     }
 
     pollComfyStatus();  // reconcile with real state either way
@@ -930,20 +962,25 @@
 
   async function freeComfyMemory() {
     const btn = document.getElementById('comfyFreeBtn');
-    btn.disabled    = true;
-    btn.textContent = 'Freeing...';
+    if (btn.disabled) return;
+
+    const originalHTML = btn.innerHTML;
+    btn.disabled   = true;
+    btn.innerHTML  = '<div class="spinner" style="width:14px;height:14px;border-width:2px;"></div>';
 
     try {
       const res  = await fetch('/api/comfyui/free', {method: 'POST'});
       const data = await res.json();
       if (!res.ok) {
         showError(data.error || 'Could not free ComfyUI memory.');
+        btn.innerHTML = originalHTML;
       } else {
-        btn.textContent = 'Freed!';
-        setTimeout(() => { btn.textContent = 'Free Memory'; }, 1500);
+        btn.innerHTML = '<i class="fa-solid fa-check" style="color:var(--accent);"></i>';
+        setTimeout(() => { btn.innerHTML = originalHTML; }, 1500);
       }
     } catch (e) {
       showError('Could not free ComfyUI memory.');
+      btn.innerHTML = originalHTML;
     }
 
     pollComfyStatus();  // reconciles freeBtn.disabled with real state

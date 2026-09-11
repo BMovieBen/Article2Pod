@@ -32,6 +32,13 @@ def get_voice_folder():
     os.makedirs(folder, exist_ok=True)
     return folder
 def get_comfy_url():       return get_required('comfy_url')
+def get_comfy_listen_host():
+    """Address ComfyUI binds to. Defaults to 0.0.0.0 (all interfaces) so
+    LAN clients -- e.g. a phone app looking for a running ComfyUI instance
+    -- can reach it, matching how the Flask web UI itself already binds
+    (see app.py). Set to '127.0.0.1' in config.json to restrict ComfyUI
+    to this machine only."""
+    return load_config().get('comfy_listen_host', '0.0.0.0')
 def get_workflow_file():
     return os.path.join(APP_DIR, get_required('workflow_file'))
 def get_output_dir():
@@ -146,6 +153,23 @@ def build_extra_model_paths_yaml():
     with open(yaml_path, 'w', encoding='utf-8') as f:
         f.write('\n'.join(sections) + '\n')
     return yaml_path
+
+def free_comfyui_memory(comfy_url=None):
+    """Ask ComfyUI to unload models and free VRAM/RAM via its /free
+    endpoint. Shared by generate-art.py (called before/after image
+    generation to make room alongside VibeVoice) and pipeline.py (the
+    on-demand Free Memory button in the UI) -- previously each kept its
+    own separate copy of this. Returns True/False, never raises; callers
+    handle their own logging since the right message differs by context."""
+    import requests
+    url = comfy_url or get_comfy_url()
+    try:
+        r = requests.post(f'{url}/free',
+                          json={'unload_models': True, 'free_memory': True},
+                          timeout=10)
+        return r.status_code == 200
+    except Exception:
+        return False
 
 def get_generation_log_path():
     log_dir = os.path.join(APP_DIR, 'log')

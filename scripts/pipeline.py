@@ -4,9 +4,9 @@
 import os, sys, json, time, shutil, subprocess, threading
 import requests
 from utils import (
-    load_config, get_comfy_url, get_temp_folder,
+    load_config, get_comfy_url, get_comfy_listen_host, get_temp_folder,
     get_input_folder, get_audio_folder, build_extra_model_paths_yaml,
-    get_comfyui_console_log_path
+    get_comfyui_console_log_path, free_comfyui_memory
 )
 from queue_manager import queue_lock, load_queue, save_queue, delete_temp_files
 
@@ -28,6 +28,7 @@ def is_comfyui_running():
 
 def start_comfyui():
     global comfy_process, comfy_log_file
+    print('[Article2Pod] Starting ComfyUI...')
     config        = load_config()
     comfy_url     = get_comfy_url()
     comfy_base    = config['comfy_base']
@@ -37,6 +38,8 @@ def start_comfyui():
     front_end     = os.path.join(local_appdata, electron_rel,
                                  'web_custom_versions', 'desktop_app')
     port          = comfy_url.split(':')[-1]
+    listen_host   = get_comfy_listen_host()
+    print(f'[Article2Pod] ComfyUI will listen on {listen_host}:{port}')
 
     args = [
         config['comfy_venv_python'], main_py,
@@ -46,7 +49,7 @@ def start_comfyui():
         '--base-directory',           comfy_base,
         '--database-url',
             f"sqlite:///{comfy_base.replace(chr(92), '/')}/user/comfyui.db",
-        '--log-stdout', '--listen', '127.0.0.1',
+        '--log-stdout', '--listen', listen_host,
         '--port', port, '--enable-manager', '--preview-method', 'auto',
     ]
 
@@ -88,11 +91,14 @@ def start_comfyui():
         time.sleep(2)
         elapsed += 2
         if is_comfyui_running():
+            print(f'[Article2Pod] ComfyUI ready at {comfy_url}')
             return True
+    print(f'[Article2Pod] ComfyUI failed to start (timed out after {timeout}s).')
     return False
 
 def stop_comfyui():
     global comfy_process, comfy_log_file
+    print('[Article2Pod] Stopping ComfyUI...')
     try:
         requests.post(f'{get_comfy_url()}/manager/reboot', timeout=3)
         time.sleep(2)
@@ -111,6 +117,7 @@ def stop_comfyui():
             pass
         comfy_log_file = None
     comfy_process = None
+    print('[Article2Pod] ComfyUI shut down.')
 
 manual_comfy_op = None  # None | 'starting' | 'stopping' -- guards the
                          # on-demand UI button against overlapping clicks
@@ -132,12 +139,8 @@ def start_comfyui_manual():
     manual_comfy_op = 'starting'
     def _run():
         global manual_comfy_op
-        print('[Article2Pod] Starting ComfyUI...')
         try:
-            if start_comfyui():
-                print('[Article2Pod] ComfyUI ready.')
-            else:
-                print('[Article2Pod] ComfyUI failed to start.')
+            start_comfyui()
         finally:
             manual_comfy_op = None
     threading.Thread(target=_run, daemon=True).start()
@@ -159,10 +162,8 @@ def stop_comfyui_manual():
     manual_comfy_op = 'stopping'
     def _run():
         global manual_comfy_op
-        print('[Article2Pod] Stopping ComfyUI...')
         try:
             stop_comfyui()
-            print('[Article2Pod] ComfyUI shut down.')
         finally:
             manual_comfy_op = None
     threading.Thread(target=_run, daemon=True).start()
@@ -174,22 +175,10 @@ def get_comfyui_status():
         'manual_op': manual_comfy_op,
     }
 
-def free_comfyui_memory():
-    """Ask ComfyUI to unload models and free VRAM/RAM -- the same /free
-    call generate-art.py already makes between VibeVoice and image
-    generation, exposed here too so it can be triggered on demand from
-    the UI independent of the art pipeline. Returns True/False; fast
-    enough to call synchronously from a Flask route, no thread needed."""
-    try:
-        r = requests.post(f'{get_comfy_url()}/free',
-                          json={'unload_models': True, 'free_memory': True},
-                          timeout=10)
-        return r.status_code == 200
-    except Exception:
-        return False
-
 def free_comfyui_memory_manual():
-    """On-demand memory free triggered from the UI. Returns (ok, error)."""
+    """On-demand memory free triggered from the UI. Returns (ok, error).
+    Uses the shared free_comfyui_memory() from utils.py (same call
+    generate-art.py makes between VibeVoice and image generation)."""
     if processing:
         return False, 'Cannot free ComfyUI memory while the queue is processing.'
     if manual_comfy_op:
@@ -324,7 +313,6 @@ def process_queue():
             # comfyui_started stays False: the queue didn't start it, so
             # it won't be responsible for stopping it once the run finishes.
         else:
-            print('[Article2Pod] Starting ComfyUI...')
             if not start_comfyui():
                 with queue_lock:
                     q = load_queue()
@@ -338,7 +326,6 @@ def process_queue():
                 current_pipeline_type = None
                 return
 
-            print('[Article2Pod] ComfyUI ready.')
             comfyui_started = True
             # Leave first item as 'processing' — main loop picks it up naturally
 
@@ -398,7 +385,13 @@ def process_queue():
     finally:
         if comfyui_started:
             stop_comfyui()
-            print('[Article2Pod] ComfyUI shut down.')
+        elif needs_comfyui and is_comfyui_running():
+            # We reused an already-running instance rather than starting
+            # our own, so we won't stop it -- but it shouldn't be left
+            # holding VibeVoice/art models in VRAM once we're done with
+            # it, since it's presumably still wanted for other things.
+            print('[Article2Pod] Freeing ComfyUI memory before releasing the shared instance...')
+            free_comfyui_memory()
         processing            = False
         stop_requested        = False
         current_slug          = None
