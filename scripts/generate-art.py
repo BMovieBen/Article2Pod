@@ -11,10 +11,10 @@ import requests
 from utils import (
     get_comfy_url, get_art_workflow_file, get_art_prompt_node_title,
     get_art_save_node_class, get_art_generation_timeout,
-    get_temp_folder, get_output_folder, log_generation,
-    free_comfyui_memory as _free_comfyui_memory
+    get_art_prompt_placeholder, get_temp_folder, get_output_folder,
+    log_generation, free_comfyui_memory as _free_comfyui_memory
 )
-from art_prompt import build_art_prompt
+from art_prompt import build_art_prompt, sanitize_title_for_prompt
 
 COMFY_URL   = get_comfy_url()
 TEMP_FOLDER = get_temp_folder()
@@ -74,9 +74,41 @@ def find_prompt_node(workflow):
         f'"art_prompt_node_title" in config.json to the title of the '
         f'node that should receive the article prompt.')
 
-def patch_workflow(workflow, prompt_text, filename_prefix):
-    node_id = find_prompt_node(workflow)
-    inputs  = workflow[node_id].setdefault('inputs', {})
+def build_prompt_for_workflow(workflow, node_id, title):
+    """Build the actual text to inject into the prompt node. If
+    art_prompt_placeholder is configured, the workflow's own existing
+    prompt text (e.g. a hardcoded style/quality string baked into the
+    workflow file) is kept as-is and the placeholder token within it is
+    replaced with the sanitized article title -- lets a workflow keep a
+    fixed instructional prefix/suffix around a variable title, without
+    the full art_prompt.py template overwriting it. Raises if the
+    placeholder is configured but not actually present in that node's
+    text, rather than silently falling back to a prompt with no title in
+    it at all (which would generate the same static image every time,
+    easy to not notice). If no placeholder is configured, this is
+    unchanged from before: the full art_prompt.py template wholesale-
+    replaces whatever was in the node."""
+    placeholder = get_art_prompt_placeholder()
+    if not placeholder:
+        return build_art_prompt(title)
+
+    inputs        = workflow[node_id].get('inputs', {})
+    existing_text = inputs.get('text') or inputs.get('value') or ''
+    if placeholder not in existing_text:
+        raise ValueError(
+            f'art_prompt_placeholder "{placeholder}" is configured but '
+            f'not found in the prompt node\'s existing text -- add it to '
+            f'the workflow\'s node text, or clear art_prompt_placeholder '
+            f'in config.json to use the full generated prompt instead.')
+
+    safe_title = sanitize_title_for_prompt(title)
+    return existing_text.replace(placeholder, safe_title)
+
+def patch_workflow(workflow, title, filename_prefix):
+    node_id     = find_prompt_node(workflow)
+    prompt_text = build_prompt_for_workflow(workflow, node_id, title)
+
+    inputs = workflow[node_id].setdefault('inputs', {})
     if 'text' in inputs:
         inputs['text'] = prompt_text
     elif 'value' in inputs:
@@ -158,9 +190,8 @@ def generate_art(slug, title):
     free_comfyui_memory()
     try:
         workflow = load_workflow()
-        prompt   = build_art_prompt(title)
         prefix   = f'art_{slug}'
-        workflow = patch_workflow(workflow, prompt, prefix)
+        workflow = patch_workflow(workflow, title, prefix)
 
         prompt_id = submit_workflow(workflow)
         if not prompt_id:

@@ -154,8 +154,13 @@ def process_text_paste(text, temp, input_dir):
     with open(os.path.join(input_dir, 'clipboard-handoff.json'), 'w', encoding='utf-8') as f:
         json.dump(handoff, f)
 
-    body    = apply_phonetic_replacements(body)
-    header  = f'{title}\r\nWritten by {author}\r\n\r\n\r\n'
+    body   = apply_phonetic_replacements(body)
+    # Byline line is left blank (not "Written by") when author is blank,
+    # so nothing gets narrated -- but the line POSITION is kept stable
+    # either way (title is always line 0, byline-or-blank is always line
+    # 1), so update_article_metadata can reliably rewrite just that slot
+    # later regardless of whether an author was ever present.
+    header  = f'{title}\r\n' + (f'Written by {author}' if author else '') + '\r\n\r\n\r\n'
     content = header + body.replace('\n', '\r\n') + '\r\n[pause:3000]'
 
     os.makedirs(temp, exist_ok=True)
@@ -246,6 +251,57 @@ def finish_add(slug, url, mode, fetch_output):
         'album_art_b64': art_b64,
         'fetch_output':  fetch_output + '\n' + meta_out,
     }, None, 200
+
+def update_article_metadata(slug, title, artist, album):
+    """Overwrite title/author/site for a pending, comfyui-pipeline article
+    after fetch but before generation -- used by the metadata-edit UI to
+    fix scraper mis-mapping without re-fetching. Updates temp/{slug}.json,
+    rewrites just the first two header lines of temp/{slug}.txt (leaving
+    the body untouched), and updates the queue item so the UI reflects it
+    immediately. Returns (ok, error)."""
+    temp      = get_temp_folder()
+    json_path = os.path.join(temp, f'{slug}.json')
+    txt_path  = os.path.join(temp, f'{slug}.txt')
+
+    with queue_lock:
+        queue = load_queue()
+        item  = next((i for i in queue if i['slug'] == slug), None)
+        if not item:
+            return False, 'Article not found in queue.'
+        if item['status'] != 'pending':
+            return False, 'Can only edit metadata for pending articles.'
+        if item.get('pipeline_type', 'comfyui') != 'comfyui':
+            return False, 'Metadata editing is only available for text articles.'
+
+        if os.path.isfile(json_path):
+            with open(json_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+            meta['title']  = title
+            meta['artist'] = artist
+            meta['album']  = album
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(meta, f, indent=2, ensure_ascii=False)
+
+        if os.path.isfile(txt_path):
+            with open(txt_path, 'r', encoding='utf-8', newline='') as f:
+                content = f.read()
+            lines = content.split('\r\n')
+            if len(lines) >= 2:
+                lines[0] = title
+                # Blank (not "Written by") when author is cleared, so it
+                # doesn't get narrated -- same convention as process_text_paste.
+                lines[1] = f'Written by {artist}' if artist else ''
+                content  = '\r\n'.join(lines)
+                with open(txt_path, 'w', encoding='utf-8', newline='') as f:
+                    f.write(content)
+
+        item['title']  = title
+        item['artist'] = artist
+        item['album']  = album
+        save_queue(queue)
+
+    print(f'[Article2Pod] Metadata updated for {slug}: "{title}" by {artist} ({album})')
+    return True, None
 
 def find_mp3_for_slug(slug, title=''):
     """Find the MP3 in the output folder by title match."""

@@ -4,11 +4,12 @@
 import re
 
 PROMPT_TEMPLATE = (
-    'No text, lettering, numbers, captions, or watermarks anywhere in the '
-    'image. Professionally made image that accompanies the following news '
-    'article headline "{title}". Convey the concept through people, '
-    'objects, and setting rather than signs, screens, newspapers, or '
-    'any other text-bearing object.'
+    "Visual representation of the below topic without any text in the "
+    "final image. It's more important to generate an image that "
+    "emphasizes key subjects and themes and does not need to be a "
+    "literal interpretation. This is intended to be used as artwork to "
+    'accompany a podcast about the below subject.\n\n'
+    'Subject: "{title}"'
 )
 
 def sanitize_title_for_prompt(title):

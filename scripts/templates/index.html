@@ -644,6 +644,75 @@
     gap: 10px;
     background: var(--surface2);
   }
+
+  .card-edit-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 2px;
+  }
+
+  .edit-input {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 13px;
+    padding: 6px 8px;
+    outline: none;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .edit-input:focus {
+    border-color: var(--accent);
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Title + Author are visually joined into one block (shared border,
+     no gap) so it's clear the swap button relates to this pair
+     specifically, not the Site field below. */
+  .edit-title-author-group {
+    position: relative;
+  }
+
+  .edit-title-author-group .edit-input:first-child {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    margin-bottom: -1px;
+  }
+
+  .edit-title-author-group .edit-input:last-child {
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+  }
+
+  .btn-swap {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    transform: translateY(-50%);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    width: 22px;
+    height: 22px;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2;
+  }
+
+  .btn-swap:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
 </style>
 </head>
 <body>
@@ -780,6 +849,7 @@
   let defaultVoice    = '';     // current default from config
   let pendingDefault  = '';     // staged but unsaved default change
   const voicePanelOpen = {};    // slug -> bool
+  const editOriginal = {};      // slug -> {title, artist, album} snapshot for dirty-check on close
   // Track which cards have output panel open
   const outputOpen = {};
 
@@ -1004,31 +1074,96 @@
   }
 
   async function toggleCardVoice(slug) {
-    voicePanelOpen[slug] = !voicePanelOpen[slug];
+    const opening = !voicePanelOpen[slug];
+    voicePanelOpen[slug] = opening;
+    voicePanelOpenCount  = Math.max(0, voicePanelOpenCount + (opening ? 1 : -1));
 
-    if (voicePanelOpen[slug]) {
-      voicePanelOpenCount++;
-    } else {
-      voicePanelOpenCount = Math.max(0, voicePanelOpenCount - 1);
-    }
+    const panel        = document.getElementById(`voice-panel-${slug}`);
+    const titleDisplay = document.getElementById(`title-display-${slug}`);
+    const metaDisplay  = document.getElementById(`meta-display-${slug}`);
+    const editFieldsEl = document.getElementById(`edit-fields-${slug}`);
 
-    const panel = document.getElementById(`voice-panel-${slug}`);
-    if (!panel) return;
+    if (opening) {
+      if (panel)        panel.style.display        = '';
+      if (titleDisplay) titleDisplay.style.display = 'none';
+      if (metaDisplay)  metaDisplay.style.display  = 'none';
+      if (editFieldsEl) editFieldsEl.style.display = '';
 
-    panel.style.display = voicePanelOpen[slug] ? '' : 'none';
-
-    if (voicePanelOpen[slug]) {
       await populateVoiceSelect(`voice-select-${slug}`, '');
-      // Get current voice from latest queue state
       try {
-        const res   = await fetch('/api/queue');
-        const data  = await res.json();
-        const item  = (data.queue || []).find(i => i.slug === slug);
+        const res  = await fetch('/api/queue');
+        const data = await res.json();
+        const item = (data.queue || []).find(i => i.slug === slug);
         if (item) {
           await populateVoiceSelect(`voice-select-${slug}`, item.voice || '');
+
+          editOriginal[slug] = {
+            title:  item.title  || '',
+            artist: item.artist || '',
+            album:  item.album  || '',
+          };
+          const t = document.getElementById(`edit-title-${slug}`);
+          const a = document.getElementById(`edit-author-${slug}`);
+          const s = document.getElementById(`edit-site-${slug}`);
+          if (t) t.value = editOriginal[slug].title;
+          if (a) a.value = editOriginal[slug].artist;
+          if (s) s.value = editOriginal[slug].album;
         }
       } catch (e) {}
+      return;
     }
+
+    // Closing -- save metadata if it actually changed, then collapse
+    // back to the plain-text display.
+    const t    = document.getElementById(`edit-title-${slug}`);
+    const a    = document.getElementById(`edit-author-${slug}`);
+    const s    = document.getElementById(`edit-site-${slug}`);
+    const orig = editOriginal[slug] || {};
+
+    if (t && a && s) {
+      const newTitle  = t.value.trim();
+      const newAuthor = a.value.trim();
+      const newSite   = s.value.trim();
+
+      if (newTitle !== (orig.title || '') ||
+          newAuthor !== (orig.artist || '') ||
+          newSite !== (orig.album || '')) {
+        try {
+          const res  = await fetch('/api/queue/metadata', {
+            method: 'PATCH',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({slug, title: newTitle, artist: newAuthor, album: newSite}),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            showError(data.error || 'Could not save metadata.');
+          } else {
+            if (titleDisplay) titleDisplay.textContent = newTitle;
+            if (metaDisplay) {
+              metaDisplay.textContent = (newSite && newAuthor)
+                ? `${newSite} \u00b7 ${newAuthor}` : (newSite || newAuthor);
+            }
+          }
+        } catch (e) {
+          showError('Could not save metadata.');
+        }
+      }
+    }
+    delete editOriginal[slug];
+
+    if (panel)        panel.style.display        = 'none';
+    if (editFieldsEl) editFieldsEl.style.display = 'none';
+    if (titleDisplay) titleDisplay.style.display = '';
+    if (metaDisplay)  metaDisplay.style.display  = '';
+  }
+
+  function swapTitleAuthor(slug) {
+    const t = document.getElementById(`edit-title-${slug}`);
+    const a = document.getElementById(`edit-author-${slug}`);
+    if (!t || !a) return;
+    const tmp = t.value;
+    t.value   = a.value;
+    a.value   = tmp;
   }
 
   async function setCardVoice(slug, voice) {
@@ -1472,8 +1607,10 @@ async function startGenerate() {
           : '';
 
         // Voice panel — only for pending items
-        const voicePanel = (item.status === 'pending' &&
-                           (item.pipeline_type === 'comfyui' || !item.pipeline_type)) ? `
+        const isEditable = item.status === 'pending' &&
+                           (item.pipeline_type === 'comfyui' || !item.pipeline_type);
+
+        const voicePanel = isEditable ? `
           <div class="card-voice-panel"
                id="voice-panel-${escHtml(item.slug)}"
                style="display:none;">
@@ -1486,14 +1623,36 @@ async function startGenerate() {
             </select>
           </div>` : '';
 
+        // Metadata edit fields — hidden by default, shown via the same
+        // gear toggle as the voice panel above (toggleCardVoice). Lets
+        // the user fix scraper title/author/site mis-mapping by hand,
+        // for pending text articles only.
+        const editFields = isEditable ? `
+          <div class="card-edit-fields" id="edit-fields-${escHtml(item.slug)}" style="display:none;">
+            <div class="edit-title-author-group">
+              <input type="text" class="edit-input" id="edit-title-${escHtml(item.slug)}"
+                     placeholder="Title" value="${escHtml(item.title || '')}">
+              <input type="text" class="edit-input" id="edit-author-${escHtml(item.slug)}"
+                     placeholder="Author" value="${escHtml(item.artist || '')}">
+              <button class="btn-swap" type="button"
+                      onclick="swapTitleAuthor('${escHtml(escJs(item.slug))}')"
+                      title="Swap title and author">
+                <i class="fa-solid fa-arrows-up-down"></i>
+              </button>
+            </div>
+            <input type="text" class="edit-input" id="edit-site-${escHtml(item.slug)}"
+                   placeholder="Site" value="${escHtml(item.album || '')}">
+          </div>` : '';
+
         card.innerHTML = `
           <div class="card-main">
             ${artHtml}
             <div class="card-info">
-              <div class="card-title">${escHtml(item.title || item.slug)}</div>
-              <div class="card-meta">
+              <div class="card-title" id="title-display-${escHtml(item.slug)}">${escHtml(item.title || item.slug)}</div>
+              <div class="card-meta" id="meta-display-${escHtml(item.slug)}">
                 ${escHtml(item.album || '')}${item.album && item.artist ? ' &middot; ' : ''}${escHtml(item.artist || '')}
               </div>
+              ${editFields}
               ${outputToggle ? `<div style="margin-top:4px">${outputToggle}</div>` : ''}
             </div>
             <div class="card-actions">${actionHtml}</div>
@@ -1519,6 +1678,13 @@ async function startGenerate() {
               `voice-select-${item.slug}`,
               item.voice || ''
             );
+
+            const titleDisplay = document.getElementById(`title-display-${item.slug}`);
+            const metaDisplay  = document.getElementById(`meta-display-${item.slug}`);
+            const editFieldsEl = document.getElementById(`edit-fields-${item.slug}`);
+            if (titleDisplay) titleDisplay.style.display = 'none';
+            if (metaDisplay)  metaDisplay.style.display  = 'none';
+            if (editFieldsEl) editFieldsEl.style.display = '';
           }
         }
 

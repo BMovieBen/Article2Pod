@@ -25,7 +25,7 @@ from pipeline import (
 from web_pipeline import (
     run_script, _should_switch_to_text,
     process_text_paste, finish_add, find_mp3_for_slug,
-    start_fetch, get_fetch_result
+    start_fetch, get_fetch_result, update_article_metadata
 )
 
 app = Flask(__name__, template_folder=os.path.join(SCRIPTS_DIR, 'templates'))
@@ -389,6 +389,26 @@ def api_queue_voice():
 
     print(f'[Article2Pod] Voice for {slug} set to: {voice or "default"}')
     return jsonify({'ok': True})
+
+@app.route('/api/queue/metadata', methods=['PATCH'])
+def api_queue_metadata():
+    """Overwrite title/author/site for a pending article, after fetch but
+    before generation -- lets the user fix scraper mis-mapping by hand."""
+    data   = request.json
+    slug   = data.get('slug', '').strip()
+    title  = data.get('title', '').strip()
+    artist = data.get('artist', '').strip()
+    album  = data.get('album', '').strip()
+
+    if not slug:
+        return jsonify({'error': 'No slug specified.'}), 400
+    if not title:
+        return jsonify({'error': 'Title cannot be empty.'}), 400
+
+    ok, error = update_article_metadata(slug, title, artist, album)
+    if not ok:
+        return jsonify({'error': error}), 400
+    return jsonify({'ok': True, 'title': title, 'artist': artist, 'album': album})
 
 @app.route('/api/comfyui/status', methods=['GET'])
 def api_comfyui_status():

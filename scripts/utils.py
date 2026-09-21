@@ -82,6 +82,9 @@ def get_art_save_node_class():
 def get_art_generation_timeout():
     return int(load_config().get('art_generation_timeout', 300))
 
+def get_art_prompt_placeholder():
+    return load_config().get('art_prompt_placeholder', '')
+
 def get_comfy_shared_models_paths():
     """Returns a list of shared model root directories to scan and
     register with ComfyUI. Accepts either a single path (string, for
@@ -303,6 +306,19 @@ def clean_author(text):
     text = re.sub(r'^[Bb][Yy]\s*', '', text).strip()
     text = re.sub(r'\s+(reported\s+from|reporting\s+from|in\s+[A-Z][a-z]+).+$', '', text).strip()
     return re.sub(r'  +', ' ', text)
+
+# A real byline is never this long -- even an elaborate multi-author credit
+# ("By Jane Smith, John Doe and Foo Bar") stays well under 100 characters,
+# while a body paragraph is almost always several hundred. Used as a
+# universal safety net across every reader-mode format branch below, so an
+# unrecognized or future format variant can degrade to 'Unknown Author'
+# instead of ever assigning a full paragraph to the author field.
+MAX_AUTHOR_LINE_LEN = 100
+
+def _safe_author(line, fallback='Unknown Author'):
+    if not line or len(line) > MAX_AUTHOR_LINE_LEN:
+        return fallback
+    return clean_author(line)
 
 # TLDs stripped when turning a bare domain into a display-friendly site
 # name. Case-sensitive on the remainder — whatever capitalization the
@@ -539,170 +555,117 @@ PUBLISHED_LINE_RE = re.compile(
 HEADER_JUNK_LINE_RE = re.compile(r'^(follow|link copied to clipboard|by)$', re.IGNORECASE)
 BYLINE_RE = re.compile(r'^by\s+', re.IGNORECASE)
 
-# Wire-service datelines ("DETROIT (AP) — ...") are a reliable fallback
-# for the site name when reader mode gives us no site/source at all (e.g.
-# Firefox-on-iOS, Polygon-on-iOS). Only checked when site is otherwise
-# unknown.
-WIRE_SERVICE_NAMES = {
-    'AP':      'Associated Press',
-    'REUTERS': 'Reuters',
-    'AFP':     'AFP',
-    'UPI':     'UPI',
-}
-WIRE_SERVICE_RE = re.compile(
-    r'^[A-Z][A-Za-z.,\'\s]{0,40}\(\s*(AP|Reuters|AFP|UPI)\s*\)\s*[—\-]',
+# Known reader-mode UI chrome and metadata phrases that can end up as
+# the "short" candidate line but are never a real byline/site name --
+# checked as a substring so partial matches (e.g. embedded in a longer
+# mashed-together line) are still caught.
+AUTHOR_JUNK_SUBSTRINGS = (
+    'share', 'save', 'follow', 'subscribe', 'sign in', 'sign up',
+    'link copied', 'add as preferred', 'hours ago', 'minutes ago',
+    'days ago', 'min read', 'advertisement', 'listen to this',
+    'topline', 'key facts', 'big number', 'key background', 'tangent',
 )
 
-# Some sites' iOS reader-mode paste includes a login prompt naming the site
-# itself, e.g. "Sign in to your Polygon.com account" -- normally dropped
-# entirely by the 'sign in to your' JUNK_PATTERN, but worth extracting as a
-# site-name fallback before it gets discarded.
-SIGNIN_SITE_RE = re.compile(
-    r'sign in to your\s+([A-Za-z0-9][A-Za-z0-9\-]*\.[A-Za-z]{2,})\s+account',
-    re.IGNORECASE
-)
-
-def detect_wire_service(body_lines, max_lines=3):
-    """Look at the first few body lines for a wire-service dateline like
-    'DETROIT (AP) — ...' and return the full service name if found,
-    else None."""
-    for line in body_lines[:max_lines]:
-        m = WIRE_SERVICE_RE.match(line)
-        if m:
-            return WIRE_SERVICE_NAMES.get(m.group(1).upper())
-    return None
-
-def detect_signin_site(body_lines, max_lines=10):
-    """Look at the first several body lines for a 'Sign in to your
-    <site> account' prompt and return a display-friendly site name if
-    found, else None. Preserves the capitalization used in the prompt
-    itself (e.g. 'Polygon.com' -> 'Polygon', 'NYTimes.com' -> 'NYTimes')."""
-    for line in body_lines[:max_lines]:
-        m = SIGNIN_SITE_RE.search(line)
-        if m:
-            return domain_to_site_name(m.group(1))
-    return None
+def _is_junk_candidate(line):
+    """True if `line` looks like reader-mode UI chrome, a date/time
+    stamp, or other non-name metadata rather than a genuine author or
+    site name. Reuses the existing reading-time/date/Published/header-
+    junk patterns (each originally built for the old per-format
+    detectors) as a general "does this look like known metadata"
+    check, plus a few structural signals:
+      - a '|' separator (e.g. a combined "Sep 3rd 2026|LOS ANGELES|4
+        min read" byline/date/read-time composite)
+      - an 'Updated'/'Published' prefix
+      - a lowercase-to-uppercase letter transition with no space
+        between them, which reliably indicates several reader-mode UI
+        elements got concatenated with no separator during copy/paste
+        (e.g. "9 hours agoShareSaveAdd as preferred on
+        GoogleTiffanie Turnbull", or a byline mashed directly against
+        a following dateline/timestamp with no space at all)
+    plus a small list of known non-name UI/section-header words."""
+    if (READING_TIME_RE.match(line) or DATE_LINE_RE.match(line) or
+            PUBLISHED_LINE_RE.match(line) or HEADER_JUNK_LINE_RE.match(line)):
+        return True
+    if '|' in line:
+        return True
+    if re.match(r'^(updated|published)\b', line, re.IGNORECASE):
+        return True
+    if re.search(r'[a-z][A-Z]', line):
+        return True
+    lower = line.lower()
+    return any(j in lower for j in AUTHOR_JUNK_SUBSTRINGS)
 
 def parse_reader_mode(text):
     """
-    Parse reader mode pasted text.
-    Returns (site, title, author, body).
-    """
+    Parse reader mode pasted text. Returns (site, title, author, body).
 
-    # Normalize line endings and smart quotes
+    Reader Mode header formats vary wildly across browsers and sites, and
+    chasing each new layout with its own detection branch is a losing
+    game -- there's always another site with a different order, or one
+    that omits the line the previous fix depended on. This instead uses
+    one simple, general rule based on the first two non-empty lines:
+
+    - Compare their lengths. A real headline is reliably longer than a
+      real byline or site name, which are both short; body prose is
+      reliably much longer than either. Whichever of the two is longer
+      is the title; if the shorter one passes a sanity check (see
+      _is_junk_candidate), it becomes both the author AND the site --
+      title accuracy matters far more than site accuracy, and there's
+      no reliable way to tell a bare site name apart from a bare byline
+      from position alone, so this deliberately doesn't try.
+    - If NEITHER of the first two lines is short enough to plausibly be
+      a byline/site name, the article's body has already started with
+      no header at all -- the less-long line is taken as the title, and
+      the longer one is folded back into the body rather than lost.
+    - Whenever the short candidate looks like reader-mode UI chrome, a
+      date/time stamp, or several concatenated elements with no
+      separating space (see _is_junk_candidate), author and site are
+      both left blank rather than populated with a wrong or garbled
+      value. tag-mp3.py already substitutes a clean "Unknown Author" /
+      "Unknown Site" placeholder for blanks at generation time, and a
+      blank author also means no "Written by ..." line gets narrated at
+      all (see process_text_paste) -- both preferable to reading a
+      mangled string aloud.
+    """
     text = text.replace('\r\n', '\n').replace('\r', '\n')
-    text = text.replace('\u2018', "'").replace('\u2019', "'")  # smart single quotes
-    text = text.replace('\u201c', '"').replace('\u201d', '"')  # smart double quotes
-    text = text.replace('\u2013', '-').replace('\u2014', '-')  # em/en dashes
+    text = text.replace('\u2018', "'").replace('\u2019', "'")
+    text = text.replace('\u201c', '"').replace('\u201d', '"')
+    text = text.replace('\u2013', '-').replace('\u2014', '-')
 
     lines    = text.splitlines()
     nonempty = [l.strip() for l in lines if l.strip()]
 
     if not nonempty:
-        return '', 'Untitled', 'Unknown Author', ''
+        return '', 'Untitled', '', ''
+    if len(nonempty) == 1:
+        return '', nonempty[0], '', ''
 
-    # Format A (most browsers): Site / Title / Author / ... / reading-time marker / body
-    reading_time_idx = None
-    for i, line in enumerate(nonempty[:10]):
-        if READING_TIME_RE.match(line):
-            reading_time_idx = i
-            break
+    line1, line2 = nonempty[0], nonempty[1]
 
-    # Format B (Firefox on iOS): Title / bare date-time line / body -- no
-    # site name, no author, no reading-time marker.
-    date_idx = None
-    if reading_time_idx is None:
-        for i, line in enumerate(nonempty[:10]):
-            if DATE_LINE_RE.match(line):
-                date_idx = i
-                break
-
-    # Format C (Polygon on iOS): Title / Author / UI chrome / "Published
-    # <date>" -- no site name, no reading-time marker, date line has a
-    # "Published" prefix and trailing timezone so it never matches Format B.
-    published_idx = None
-    if reading_time_idx is None and date_idx is None:
-        for i, line in enumerate(nonempty[:15]):
-            if PUBLISHED_LINE_RE.match(line):
-                published_idx = i
-                break
-
-    # Format D (wire-service / bylined articles, no site line, no
-    # reading-time marker, no date/Published line -- e.g. AP pieces synced
-    # via Apple News or similar): Title / "BY <name(s)>" / body, or
-    # occasionally the byline before the title. Without this, the fallback
-    # below assumes a 3-line site/title/author header and shifts every
-    # field by one -- the byline becomes the "title" (breaking every future
-    # article sharing that byline, since the title never changes), and the
-    # real first paragraph of body text gets swallowed as the "author".
-    # Only checked at index 0/1 -- a byline at index 2 already matches the
-    # ordinary site/title/author fallback correctly and is left alone.
-    byline_idx = None
-    if reading_time_idx is None and date_idx is None and published_idx is None:
-        for i, line in enumerate(nonempty[:2]):
-            if BYLINE_RE.match(line):
-                byline_idx = i
-                break
-
-    if reading_time_idx is not None:
-        header_lines = nonempty[:reading_time_idx]
-        site   = header_lines[0] if len(header_lines) > 0 else ''
-        title  = header_lines[1] if len(header_lines) > 1 else 'Untitled'
-        author = header_lines[2] if len(header_lines) > 2 else 'Unknown Author'
-        author = clean_author(author)
-        body_source = nonempty[reading_time_idx + 1:]
-
-    elif date_idx is not None:
-        header_lines = nonempty[:date_idx]
-        title  = header_lines[0] if header_lines else 'Untitled'
-        site   = ''
-        author = 'Unknown Author'
-        body_source = nonempty[date_idx + 1:]
-        # Some variants still include a "By <name>" line right after the date
-        if body_source and BYLINE_RE.match(body_source[0]):
-            author      = clean_author(body_source[0])
-            body_source = body_source[1:]
-
-    elif published_idx is not None:
-        title  = nonempty[0] if nonempty else 'Untitled'
-        site   = ''
-        author = 'Unknown Author'
-        # Scan lines between title and the Published line for the first
-        # one that isn't known UI chrome (Follow, Link copied to
-        # clipboard, By, or a bare vote/comment count) -- that's the author.
-        for line in nonempty[1:published_idx]:
-            if HEADER_JUNK_LINE_RE.match(line):
-                continue
-            if re.match(r'^\d+$', line):
-                continue
-            author = clean_author(line)
-            break
-        body_source = nonempty[published_idx + 1:]
-
-    elif byline_idx is not None:
-        if byline_idx == 0:
-            author = clean_author(nonempty[0])
-            title  = nonempty[1] if len(nonempty) > 1 else 'Untitled'
-        else:  # byline_idx == 1
-            title  = nonempty[0]
-            author = clean_author(nonempty[1])
-        site        = ''
-        body_source = nonempty[byline_idx + 1:]
-
+    if len(line1) <= MAX_AUTHOR_LINE_LEN or len(line2) <= MAX_AUTHOR_LINE_LEN:
+        # At least one of the first two lines is short enough to
+        # plausibly be a byline/site name -- the longer is the title,
+        # the shorter is the author/site candidate.
+        if len(line1) >= len(line2):
+            title, candidate = line1, line2
+        else:
+            title, candidate = line2, line1
+        body_source = nonempty[2:]
     else:
-        header_lines = nonempty[:3]
-        site   = header_lines[0] if len(header_lines) > 0 else ''
-        title  = header_lines[1] if len(header_lines) > 1 else 'Untitled'
-        author = header_lines[2] if len(header_lines) > 2 else 'Unknown Author'
-        author = clean_author(author)
-        body_source = nonempty[3:]
+        # Neither is short -- the body has already started. The
+        # less-long line is the title; the longer one is actually the
+        # first line of body text, folded back in rather than lost.
+        if len(line1) <= len(line2):
+            title, body_first_line = line1, line2
+        else:
+            title, body_first_line = line2, line1
+        candidate   = None
+        body_source = [body_first_line] + nonempty[2:]
 
-    # Site fallback chain: if we still don't have a site/source, check the
-    # body for self-identifying strings before giving up. Order matters --
-    # a wire-service dateline is checked first since it's the more specific
-    # signal; the sign-in prompt is a broader net across more sites.
-    if not site:
-        site = detect_wire_service(body_source) or detect_signin_site(body_source)
+    author = ''
+    if candidate and not _is_junk_candidate(candidate):
+        author = _safe_author(candidate)
+    site = author
 
     title_norm = title.strip().lower()
     body_lines = []
