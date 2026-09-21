@@ -302,7 +302,7 @@ def sanitize_filename(name):
 
 def clean_author(text):
     if text.startswith('http') or '/' in text:
-        return 'Unknown Author'
+        return ''
     text = re.sub(r'^[Bb][Yy]\s*', '', text).strip()
     text = re.sub(r'\s+(reported\s+from|reporting\s+from|in\s+[A-Z][a-z]+).+$', '', text).strip()
     return re.sub(r'  +', ' ', text)
@@ -310,12 +310,15 @@ def clean_author(text):
 # A real byline is never this long -- even an elaborate multi-author credit
 # ("By Jane Smith, John Doe and Foo Bar") stays well under 100 characters,
 # while a body paragraph is almost always several hundred. Used as a
-# universal safety net across every reader-mode format branch below, so an
-# unrecognized or future format variant can degrade to 'Unknown Author'
-# instead of ever assigning a full paragraph to the author field.
+# universal safety net so an unreliable candidate degrades to blank
+# instead of ever assigning a full paragraph to the author field. Blank
+# (not 'Unknown Author') is deliberate throughout this file -- that
+# placeholder should only ever be introduced by tag-mp3.py's safe_meta()
+# at generation time, so the UI and metadata JSON can tell "we don't know
+# the author" apart from "the author is literally named Unknown Author".
 MAX_AUTHOR_LINE_LEN = 100
 
-def _safe_author(line, fallback='Unknown Author'):
+def _safe_author(line, fallback=''):
     if not line or len(line) > MAX_AUTHOR_LINE_LEN:
         return fallback
     return clean_author(line)
@@ -389,9 +392,7 @@ def get_author(soup):
             text = tag.get_text(strip=True)
             if text and not text.startswith('http'):
                 return clean_author(text)
-    return 'Unknown Author'
-
-def get_site_name(soup, base_url):
+    return ''
     og = soup.find('meta', property='og:site_name')
     if og and og.get('content', '').strip():
         return og['content'].strip()
