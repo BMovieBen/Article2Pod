@@ -252,13 +252,29 @@ def finish_add(slug, url, mode, fetch_output):
         'fetch_output':  fetch_output + '\n' + meta_out,
     }, None, 200
 
+def _load_sidecar(json_path, slug):
+    """Read temp/{slug}.json, or start a minimal one if it doesn't exist
+    yet (e.g. YouTube items whose add-time yt-dlp lookup failed) -- so a
+    user edit always has somewhere to persist."""
+    if os.path.isfile(json_path):
+        with open(json_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {'slug': slug}
+
+def _save_sidecar(json_path, meta):
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(meta, f, indent=2, ensure_ascii=False)
+
 def update_article_metadata(slug, title, artist, album):
-    """Overwrite title/author/site for a pending, comfyui-pipeline article
+    """Overwrite title/author/site for a pending article (any pipeline)
     after fetch but before generation -- used by the metadata-edit UI to
     fix scraper mis-mapping without re-fetching. Updates temp/{slug}.json,
-    rewrites just the first two header lines of temp/{slug}.txt (leaving
-    the body untouched), and updates the queue item so the UI reflects it
-    immediately. Returns (ok, error)."""
+    rewrites just the first two header lines of temp/{slug}.txt when there
+    is one (text articles only -- youtube/audio items have no narration
+    text), and updates the queue item so the UI reflects it immediately.
+    Sets metadata_edited in the sidecar so fetch-youtube.py, which
+    re-reads yt-dlp metadata at processing time, keeps these values
+    instead of clobbering them. Returns (ok, error)."""
     temp      = get_temp_folder()
     json_path = os.path.join(temp, f'{slug}.json')
     txt_path  = os.path.join(temp, f'{slug}.txt')
@@ -270,17 +286,13 @@ def update_article_metadata(slug, title, artist, album):
             return False, 'Article not found in queue.'
         if item['status'] != 'pending':
             return False, 'Can only edit metadata for pending articles.'
-        if item.get('pipeline_type', 'comfyui') != 'comfyui':
-            return False, 'Metadata editing is only available for text articles.'
 
-        if os.path.isfile(json_path):
-            with open(json_path, 'r', encoding='utf-8') as f:
-                meta = json.load(f)
-            meta['title']  = title
-            meta['artist'] = artist
-            meta['album']  = album
-            with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(meta, f, indent=2, ensure_ascii=False)
+        meta = _load_sidecar(json_path, slug)
+        meta['title']           = title
+        meta['artist']          = artist
+        meta['album']           = album
+        meta['metadata_edited'] = True
+        _save_sidecar(json_path, meta)
 
         if os.path.isfile(txt_path):
             with open(txt_path, 'r', encoding='utf-8', newline='') as f:
@@ -303,17 +315,42 @@ def update_article_metadata(slug, title, artist, album):
     print(f'[Article2Pod] Metadata updated for {slug}: "{title}" by {artist} ({album})')
     return True, None
 
-def set_custom_article_art(slug, image_bytes):
-    """Overwrite album art for a pending, comfyui-pipeline article with a
-    user-uploaded/pasted/dropped image -- same restriction as
-    update_article_metadata (pending + comfyui only). Crops/resizes to
-    the standard 500x500 used by every other art source in this pipeline
-    and overwrites temp/{slug}.jpg. Also cancels any pending ComfyUI art
-    generation for this item, in both the queue item and temp/{slug}.json
-    -- otherwise the pipeline would still run generate-art.py later and
-    silently overwrite what the user just chose. Returns (ok, error)."""
-    from utils import crop_image_bytes_to_square
+def write_mp3_art(mp3_path, jpg_bytes):
+    """Replace the embedded cover art (APIC) in an already-tagged MP3,
+    leaving every other tag alone."""
+    from mutagen.id3 import ID3, APIC, ID3NoHeaderError
+    try:
+        tags = ID3(mp3_path)
+    except ID3NoHeaderError:
+        tags = ID3()
+    tags.delall('APIC')
+    tags.add(APIC(encoding=3, mime='image/jpeg', type=3,
+                  desc='Cover', data=jpg_bytes))
+    tags.save(mp3_path)
 
+def _image_to_jpeg_bytes(image_bytes):
+    """Crop/resize to the standard 500x500 used by every other art source
+    in this pipeline and re-encode as JPEG. Raises on unreadable input."""
+    from io import BytesIO
+    from utils import crop_image_bytes_to_square
+    img = crop_image_bytes_to_square(image_bytes)
+    buf = BytesIO()
+    img.save(buf, 'JPEG', quality=90)
+    return buf.getvalue()
+
+def set_custom_article_art(slug, image_bytes):
+    """Overwrite album art for a queue item with a user-uploaded/pasted/
+    dropped image. Works for any pipeline type, in two states:
+
+    - pending: overwrites temp/{slug}.jpg, which tag-mp3.py embeds later.
+      Also cancels any pending ComfyUI art generation and sets art_custom
+      in the sidecar -- otherwise generate-art.py (text articles) or
+      fetch-youtube.py's thumbnail download (YouTube) would silently
+      overwrite what the user just chose during processing.
+    - done: rewrites the cover art embedded in the finished MP3 in the
+      output folder, and temp/{slug}.jpg so the card shows it too.
+
+    Returns (ok, error, jpg_bytes)."""
     temp      = get_temp_folder()
     json_path = os.path.join(temp, f'{slug}.json')
     jpg_path  = os.path.join(temp, f'{slug}.jpg')
@@ -322,33 +359,56 @@ def set_custom_article_art(slug, image_bytes):
         queue = load_queue()
         item  = next((i for i in queue if i['slug'] == slug), None)
         if not item:
-            return False, 'Article not found in queue.'
-        if item['status'] != 'pending':
-            return False, 'Can only set custom art for pending articles.'
-        if item.get('pipeline_type', 'comfyui') != 'comfyui':
-            return False, 'Custom art is only available for text articles.'
+            return False, 'Article not found in queue.', None
+        if item['status'] not in ('pending', 'done'):
+            return False, 'Can only set custom art for pending or finished articles.', None
 
         try:
-            img = crop_image_bytes_to_square(image_bytes)
+            jpg_bytes = _image_to_jpeg_bytes(image_bytes)
         except Exception as e:
-            return False, f'Could not read that image: {e}'
+            return False, f'Could not read that image: {e}', None
 
-        img.save(jpg_path, 'JPEG', quality=90)
+        if item['status'] == 'done':
+            mp3_path = find_mp3_for_slug(slug, item.get('title', ''))
+            if not mp3_path:
+                return False, 'Could not find the finished MP3 to update.', None
+            try:
+                write_mp3_art(mp3_path, jpg_bytes)
+            except Exception as e:
+                return False, f'Could not update MP3 art: {e}', None
+            print(f'[Article2Pod] Art replaced in: {mp3_path}')
 
-        if os.path.isfile(json_path):
-            with open(json_path, 'r', encoding='utf-8') as f:
-                meta = json.load(f)
+        os.makedirs(temp, exist_ok=True)
+        with open(jpg_path, 'wb') as f:
+            f.write(jpg_bytes)
+
+        if item['status'] == 'pending':
+            meta = _load_sidecar(json_path, slug)
             meta['album_art']           = jpg_path
             meta['art_pending_comfyui'] = False
-            with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(meta, f, indent=2, ensure_ascii=False)
+            meta['art_custom']          = True
+            _save_sidecar(json_path, meta)
+            item['art_pending_comfyui'] = False
 
-        item['album_art']           = jpg_path
-        item['art_pending_comfyui'] = False
+        item['album_art'] = jpg_path
         save_queue(queue)
 
     print(f'[Article2Pod] Custom art set for {slug}')
-    return True, None
+    return True, None, jpg_bytes
+
+def set_library_mp3_art(mp3_path, image_bytes):
+    """Replace the cover art embedded in a library MP3 (one no longer in
+    the queue). Returns (ok, error, jpg_bytes)."""
+    try:
+        jpg_bytes = _image_to_jpeg_bytes(image_bytes)
+    except Exception as e:
+        return False, f'Could not read that image: {e}', None
+    try:
+        write_mp3_art(mp3_path, jpg_bytes)
+    except Exception as e:
+        return False, f'Could not update MP3 art: {e}', None
+    print(f'[Article2Pod] Art replaced in: {mp3_path}')
+    return True, None, jpg_bytes
 
 def find_mp3_for_slug(slug, title=''):
     """Find the MP3 in the output folder by title match."""
