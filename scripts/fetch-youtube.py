@@ -90,6 +90,21 @@ def fetch_youtube(url, slug):
     check_dependencies()
     update_ytdlp()
 
+    # The web UI lets the user edit title/channel/album and swap the art
+    # while the item is pending, flagging that in the existing sidecar --
+    # keep those edits rather than overwriting them with fresh yt-dlp data.
+    json_path = os.path.join(TEMP_FOLDER, f'{slug}.json')
+    art_file  = os.path.join(TEMP_FOLDER, f'{slug}.jpg')
+    existing  = {}
+    if os.path.isfile(json_path):
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                existing = json.load(f)
+        except Exception:
+            existing = {}
+    keep_meta = bool(existing.get('metadata_edited'))
+    keep_art  = bool(existing.get('art_custom')) and os.path.isfile(art_file)
+
     print(f'  Fetching video metadata...')
     meta      = get_video_metadata(url)
     title     = meta.get('title', 'Untitled')
@@ -98,15 +113,24 @@ def fetch_youtube(url, slug):
     album     = playlist if playlist else channel
     thumbnail = meta.get('thumbnail')
 
+    if keep_meta:
+        title   = existing.get('title', title)
+        channel = existing.get('artist', channel)
+        album   = existing.get('album', album)
+        print(f'  Using user-edited metadata.')
+
     print(f'  Title:    {title}')
     print(f'  Channel:  {channel}')
     print(f'  Album:    {album}')
 
     art_path = None
-    if thumbnail:
+    if keep_art:
+        art_path = art_file
+        print(f'  Art:      using custom art {art_path}')
+    elif thumbnail:
         img = fetch_and_resize_image(thumbnail)
         if img:
-            art_path = os.path.join(TEMP_FOLDER, f'{slug}.jpg')
+            art_path = art_file
             img.save(art_path, 'JPEG', quality=90)
             print(f'  Art:      {art_path}')
         else:
@@ -120,7 +144,10 @@ def fetch_youtube(url, slug):
         'slug':       slug,
         'source_url': url,
     }
-    json_path = os.path.join(TEMP_FOLDER, f'{slug}.json')
+    if keep_meta:
+        meta_out['metadata_edited'] = True
+    if keep_art:
+        meta_out['art_custom'] = True
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(meta_out, f, indent=2, ensure_ascii=False)
     print(f'  Meta:     {json_path}')

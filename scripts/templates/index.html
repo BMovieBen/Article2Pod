@@ -905,6 +905,7 @@
   const voicePanelOpen = {};    // slug -> bool
   const editOriginal = {};      // slug -> {title, artist, album} snapshot for dirty-check on close
   let artUploadTargetSlug = null;  // which card's art the shared file input is currently for
+  const libArtPaths = {};          // library art key -> MP3 relative path (keys not in here are queue slugs)
   const MAX_ART_UPLOAD_BYTES = 20 * 1024 * 1024;  // 20MB sanity cap, not a hard architectural limit
   // Track which cards have output panel open
   const outputOpen = {};
@@ -989,10 +990,14 @@
         reader.readAsDataURL(file);
       });
 
-      const res  = await fetch('/api/queue/art', {
+      // Same art target helpers serve queue cards (keyed by slug) and
+      // library cards (keyed by a per-render id mapped to the MP3 path).
+      const libPath = libArtPaths[slug];
+      const res  = await fetch(libPath ? '/api/library/art' : '/api/queue/art', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({slug, image_data: dataUrl}),
+        body: JSON.stringify(libPath ? {path: libPath, image_data: dataUrl}
+                                     : {slug, image_data: dataUrl}),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -1682,6 +1687,37 @@ async function startGenerate() {
     }
   }
 
+  // Album art thumbnail. When editable, click/drop live on the thumbnail
+  // itself. Paste does NOT -- clicking the thumbnail opens the file picker,
+  // which would steal focus and make it impossible to ever focus the
+  // thumbnail for a paste. Paste gets its own dedicated badge instead,
+  // using a contenteditable element so iOS (which only offers a native
+  // Paste action over an editable region) has something to paste into.
+  function artCellHtml(key, artB64, editable) {
+    const k = escHtml(escJs(key));
+    const interactionAttrs = editable ? `
+      onclick="triggerArtUpload('${k}')"
+      ondragover="handleArtDragOver('${k}', event)"
+      ondragleave="handleArtDragLeave('${k}', event)"
+      ondrop="handleArtDrop('${k}', event)"
+      title="Click or drop an image to set custom art"
+    ` : '';
+
+    const pasteTargetHtml = editable ? `
+      <div class="art-paste-target" id="paste-${escHtml(key)}"
+           contenteditable="true" tabindex="0"
+           onpaste="handleArtPaste('${k}', event)"
+           title="Tap here, then paste an image (Ctrl+V)"><i class="fa-solid fa-clipboard"></i></div>
+    ` : '';
+
+    const baseClass = artB64 ? 'card-art' : 'card-art-placeholder';
+    const cls       = editable ? `${baseClass} card-art-editable` : baseClass;
+
+    return artB64
+      ? `<div class="art-wrapper"><img id="art-${escHtml(key)}" class="${cls}" src="${artB64}" alt="" ${interactionAttrs}>${pasteTargetHtml}</div>`
+      : `<div class="art-wrapper"><div id="art-${escHtml(key)}" class="${cls}" ${interactionAttrs}>&#9834;</div>${pasteTargetHtml}</div>`;
+  }
+
   function renderQueue(queue, processing) {
     const list    = document.getElementById('queueList');
     const section = document.getElementById('queueSection');
@@ -1699,38 +1735,14 @@ async function startGenerate() {
         card.className    = `queue-card status-${item.status}`;
         card.dataset.slug = item.slug;
 
-        // Hoisted here so both the art thumbnail (upload/paste/drop
-        // target) and the metadata edit fields further below can use it.
-        const isEditable = item.status === 'pending' &&
-                           (item.pipeline_type === 'comfyui' || !item.pipeline_type);
+        // Metadata (and voice, for text articles) is editable while
+        // pending, for every pipeline type. Art can also be swapped once
+        // the item is done -- that rewrites the art in the finished MP3.
+        const isEditable    = item.status === 'pending';
+        const isArtEditable = item.status === 'pending' || item.status === 'done';
+        const isTextArticle = (item.pipeline_type || 'comfyui') === 'comfyui';
 
-        // Click and drop live on the thumbnail itself. Paste does NOT --
-        // clicking the thumbnail opens the file picker, which would steal
-        // focus and make it impossible to ever focus the thumbnail for a
-        // paste. Paste gets its own dedicated badge below instead, using a
-        // contenteditable element so iOS (which only offers a native
-        // Paste action over an editable region) has something to paste into.
-        const artInteractionAttrs = isEditable ? `
-          onclick="triggerArtUpload('${escHtml(escJs(item.slug))}')"
-          ondragover="handleArtDragOver('${escHtml(escJs(item.slug))}', event)"
-          ondragleave="handleArtDragLeave('${escHtml(escJs(item.slug))}', event)"
-          ondrop="handleArtDrop('${escHtml(escJs(item.slug))}', event)"
-          title="Click or drop an image to set custom art"
-        ` : '';
-
-        const pasteTargetHtml = isEditable ? `
-          <div class="art-paste-target" id="paste-${escHtml(item.slug)}"
-               contenteditable="true" tabindex="0"
-               onpaste="handleArtPaste('${escHtml(escJs(item.slug))}', event)"
-               title="Tap here, then paste an image (Ctrl+V)"><i class="fa-solid fa-clipboard"></i></div>
-        ` : '';
-
-        const artBaseClass = item.album_art_b64 ? 'card-art' : 'card-art-placeholder';
-        const artClass      = isEditable ? `${artBaseClass} card-art-editable` : artBaseClass;
-
-        const artHtml = item.album_art_b64
-          ? `<div class="art-wrapper"><img id="art-${escHtml(item.slug)}" class="${artClass}" src="${item.album_art_b64}" alt="" ${artInteractionAttrs}>${pasteTargetHtml}</div>`
-          : `<div class="art-wrapper"><div id="art-${escHtml(item.slug)}" class="${artClass}" ${artInteractionAttrs}>&#9834;</div>${pasteTargetHtml}</div>`;
+        const artHtml = artCellHtml(item.slug, item.album_art_b64, isArtEditable);
 
         // Gear is accent-colored if item has a custom voice set
         const gearClass = item.voice ? 'btn-gear customized' : 'btn-gear';
@@ -1760,15 +1772,17 @@ async function startGenerate() {
           const pipelineType = item.pipeline_type || 'comfyui';
           const gearClass    = item.voice ? 'btn-gear customized' : 'btn-gear';
 
+          // Gear toggles the metadata edit fields for every pipeline;
+          // the voice dropdown inside it only exists for text articles.
+          const gearBtn = `
+            <button class="${gearClass}"
+              onclick="toggleCardVoice('${escHtml(escJs(item.slug))}')"
+              title="${pipelineType === 'comfyui' ? 'Voice and details' : 'Edit details'}"
+              id="gear-${escHtml(item.slug)}">
+              <i class="fa-solid fa-gear"></i></button>`;
+
           let pipelineIcon = '';
-          if (pipelineType === 'comfyui') {
-            pipelineIcon = `
-              <button class="${gearClass}"
-                onclick="toggleCardVoice('${escHtml(escJs(item.slug))}')"
-                title="Voice settings"
-                id="gear-${escHtml(item.slug)}">
-                <i class="fa-solid fa-gear"></i></button>`;
-          } else if (pipelineType === 'audio') {
+          if (pipelineType === 'audio') {
             pipelineIcon = `
               <span class="btn-gear" title="Embedded audio — will download directly"
                 style="cursor:default;color:var(--accent2);">
@@ -1782,6 +1796,7 @@ async function startGenerate() {
 
           actionHtml = `
             ${pipelineIcon}
+            ${gearBtn}
             <button class="btn-icon danger"
               onclick="removeItem('${escHtml(escJs(item.slug))}')"
               title="Remove"
@@ -1796,8 +1811,8 @@ async function startGenerate() {
              </button>`
           : '';
 
-        // Voice panel — only for pending items
-        const voicePanel = isEditable ? `
+        // Voice panel — only for pending text articles
+        const voicePanel = isEditable && isTextArticle ? `
           <div class="card-voice-panel"
                id="voice-panel-${escHtml(item.slug)}"
                style="display:none;">
@@ -1813,7 +1828,7 @@ async function startGenerate() {
         // Metadata edit fields — hidden by default, shown via the same
         // gear toggle as the voice panel above (toggleCardVoice). Lets
         // the user fix scraper title/author/site mis-mapping by hand,
-        // for pending text articles only.
+        // for any pending item.
         const editFields = isEditable ? `
           <div class="card-edit-fields" id="edit-fields-${escHtml(item.slug)}" style="display:none;">
             <div class="edit-title-author-group">
@@ -1855,24 +1870,24 @@ async function startGenerate() {
 
         list.appendChild(card);
 
-        // Populate voice dropdown after card is in DOM
-        if (item.status === 'pending') {
-          const panelVisible = voicePanelOpen[item.slug] || false;
+        // Restore an open edit panel (and populate the voice dropdown,
+        // when there is one) after card is in DOM
+        if (item.status === 'pending' && voicePanelOpen[item.slug]) {
           const panel = document.getElementById(`voice-panel-${item.slug}`);
-          if (panel && panelVisible) {
+          if (panel) {
             panel.style.display = '';
             populateVoiceSelect(
               `voice-select-${item.slug}`,
               item.voice || ''
             );
-
-            const titleDisplay = document.getElementById(`title-display-${item.slug}`);
-            const metaDisplay  = document.getElementById(`meta-display-${item.slug}`);
-            const editFieldsEl = document.getElementById(`edit-fields-${item.slug}`);
-            if (titleDisplay) titleDisplay.style.display = 'none';
-            if (metaDisplay)  metaDisplay.style.display  = 'none';
-            if (editFieldsEl) editFieldsEl.style.display = '';
           }
+
+          const titleDisplay = document.getElementById(`title-display-${item.slug}`);
+          const metaDisplay  = document.getElementById(`meta-display-${item.slug}`);
+          const editFieldsEl = document.getElementById(`edit-fields-${item.slug}`);
+          if (titleDisplay) titleDisplay.style.display = 'none';
+          if (metaDisplay)  metaDisplay.style.display  = 'none';
+          if (editFieldsEl) editFieldsEl.style.display = '';
         }
 
       } catch (e) {
@@ -1945,6 +1960,7 @@ async function startGenerate() {
 
     const list = document.getElementById('libraryList');
     list.innerHTML = '';
+    for (const k in libArtPaths) delete libArtPaths[k];
 
     document.getElementById('libraryCount').textContent =
       `(${data.total} podcast${data.total !== 1 ? 's' : ''})`;
@@ -1955,11 +1971,12 @@ async function startGenerate() {
         card.className       = 'library-card';
         card.dataset.libpath = item.path;
 
-        const artHtml = item.art_b64
-          ? `<img class="card-art" src="${item.art_b64}" alt="">`
-          : `<div class="card-art-placeholder">&#9834;</div>`;
-
         const safeId = Math.random().toString(36).substring(2, 10);
+
+        // Art is swappable here too -- rewrites the art in the MP3 itself.
+        const artKey = `lib-${safeId}`;
+        libArtPaths[artKey] = item.path;
+        const artHtml = artCellHtml(artKey, item.art_b64, true);
 
         card.innerHTML = `
           <div class="card-main">

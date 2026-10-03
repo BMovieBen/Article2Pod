@@ -26,7 +26,7 @@ from web_pipeline import (
     run_script, _should_switch_to_text,
     process_text_paste, finish_add, find_mp3_for_slug,
     start_fetch, get_fetch_result, update_article_metadata,
-    set_custom_article_art
+    set_custom_article_art, set_library_mp3_art
 )
 
 app = Flask(__name__, template_folder=os.path.join(SCRIPTS_DIR, 'templates'))
@@ -411,13 +411,25 @@ def api_queue_metadata():
         return jsonify({'error': error}), 400
     return jsonify({'ok': True, 'title': title, 'artist': artist, 'album': album})
 
+def _decode_image_data(image_data):
+    """Accept a data URL (data:image/...;base64,....) or raw base64 --
+    format doesn't matter beyond that, crop_image_bytes_to_square sniffs
+    it from the bytes themselves. Returns bytes, or None if invalid."""
+    if image_data.strip().startswith('data:') and ',' in image_data:
+        image_data = image_data.split(',', 1)[1]
+    try:
+        return base64.b64decode(image_data)
+    except Exception:
+        return None
+
+def _jpeg_data_url(jpg_bytes):
+    return 'data:image/jpeg;base64,' + base64.b64encode(jpg_bytes).decode('utf-8')
+
 @app.route('/api/queue/art', methods=['POST'])
 def api_queue_art():
-    """Set custom album art for a pending article from an uploaded,
-    pasted, or dropped image. Accepts a data URL
-    (data:image/...;base64,....) or raw base64 in image_data -- format
-    doesn't matter beyond that, crop_image_bytes_to_square sniffs it
-    from the bytes themselves."""
+    """Set custom album art for a pending or finished queue item from an
+    uploaded, pasted, or dropped image. For finished items this rewrites
+    the art embedded in the output MP3."""
     data       = request.json
     slug       = data.get('slug', '').strip()
     image_data = data.get('image_data', '')
@@ -427,26 +439,43 @@ def api_queue_art():
     if not image_data:
         return jsonify({'error': 'No image data provided.'}), 400
 
-    if image_data.strip().startswith('data:') and ',' in image_data:
-        image_data = image_data.split(',', 1)[1]
-
-    try:
-        image_bytes = base64.b64decode(image_data)
-    except Exception:
+    image_bytes = _decode_image_data(image_data)
+    if image_bytes is None:
         return jsonify({'error': 'Invalid image data.'}), 400
 
-    ok, error = set_custom_article_art(slug, image_bytes)
+    ok, error, jpg_bytes = set_custom_article_art(slug, image_bytes)
     if not ok:
         return jsonify({'error': error}), 400
+    return jsonify({'ok': True, 'album_art_b64': _jpeg_data_url(jpg_bytes)})
 
-    from utils import get_temp_folder
-    jpg_path = os.path.join(get_temp_folder(), f'{slug}.jpg')
-    art_b64  = None
-    if os.path.isfile(jpg_path):
-        with open(jpg_path, 'rb') as f:
-            art_b64 = 'data:image/jpeg;base64,' + base64.b64encode(f.read()).decode('utf-8')
+@app.route('/api/library/art', methods=['POST'])
+def api_library_art():
+    """Replace the cover art embedded in a library MP3, by relative path."""
+    from utils import get_output_dir
+    data       = request.json
+    rel_path   = data.get('path')
+    image_data = data.get('image_data', '')
 
-    return jsonify({'ok': True, 'album_art_b64': art_b64})
+    if not rel_path:
+        return jsonify({'error': 'No path provided.'}), 400
+    if not image_data:
+        return jsonify({'error': 'No image data provided.'}), 400
+
+    output_dir = get_output_dir()
+    mp3_path   = os.path.normpath(os.path.join(output_dir, rel_path))
+    if not mp3_path.startswith(os.path.normpath(output_dir)):
+        return jsonify({'error': 'Invalid path.'}), 400
+    if not os.path.isfile(mp3_path):
+        return jsonify({'error': 'File not found.'}), 404
+
+    image_bytes = _decode_image_data(image_data)
+    if image_bytes is None:
+        return jsonify({'error': 'Invalid image data.'}), 400
+
+    ok, error, jpg_bytes = set_library_mp3_art(mp3_path, image_bytes)
+    if not ok:
+        return jsonify({'error': error}), 400
+    return jsonify({'ok': True, 'album_art_b64': _jpeg_data_url(jpg_bytes)})
 
 @app.route('/api/comfyui/status', methods=['GET'])
 def api_comfyui_status():
