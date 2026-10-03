@@ -4,7 +4,24 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230d0f12'/><text x='50' y='72' font-family='sans-serif' font-size='52' font-weight='bold' fill='%234ade80' text-anchor='middle'>A2P</text></svg>">
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" id="viewportMeta" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<script>
+  // iOS browsers (Safari, and Firefox/Chrome, which are WebKit underneath)
+  // auto-zoom the page when focusing any editable element whose text is
+  // under 16px -- including the art paste badge. maximum-scale=1 stops
+  // that auto-zoom, and on iOS it does NOT block the user's own pinch
+  // zoom (iOS ignores it for that), so there's no accessibility cost.
+  // Applied only on iOS since Android does honor it as a pinch-zoom block.
+  (function () {
+    const ua  = navigator.userAgent;
+    const iOS = /iPad|iPhone|iPod/.test(ua) ||
+                (ua.includes('Macintosh') && navigator.maxTouchPoints > 1);  // iPadOS reports as Mac
+    if (iOS) {
+      document.getElementById('viewportMeta').setAttribute('content',
+        'width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover');
+    }
+  })();
+</script>
 <title>Article2Pod</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700;800&display=swap');
@@ -23,6 +40,7 @@
     --radius:    12px;
     --mono:      'DM Mono', monospace;
     --sans:      'Syne', sans-serif;
+    --page-max:  600px;   /* widened by the breakpoints at the end of this stylesheet */
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -32,7 +50,7 @@
     color: var(--text);
     font-family: var(--sans);
     min-height: 100vh;
-    padding: 0 0 80px;
+    padding: 0 0 calc(80px + env(safe-area-inset-bottom));
   }
 
   /* Header */
@@ -41,7 +59,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    max-width: 600px;
+    max-width: var(--page-max);
     margin: 0 auto;
   }
 
@@ -68,9 +86,9 @@
 
   /* Main container */
   main {
-    max-width: 600px;
+    max-width: var(--page-max);
     margin: 0 auto;
-    padding: 20px;
+    padding: 20px max(20px, env(safe-area-inset-left)) 20px max(20px, env(safe-area-inset-right));
   }
 
   /* Input section */
@@ -304,7 +322,13 @@
     background: var(--surface);
     border: 1px solid var(--border);
     color: var(--muted);
-    font-size: 10px;
+    /* 16px on the editable element itself, not 10px: iOS auto-zooms
+       into any focused editable element with text under 16px. The icon
+       is sized down separately below. */
+    font-size: 16px;
+    line-height: 1;
+    overflow: hidden;
+    caret-color: transparent;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -312,6 +336,12 @@
     outline: none;
     user-select: none;
     -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .art-paste-target i {
+    font-size: 10px;
+    pointer-events: none;
   }
 
   .art-paste-target:hover,
@@ -478,7 +508,7 @@
     left: 0;
     right: 0;
     background: linear-gradient(to top, var(--bg) 60%, transparent);
-    padding: 20px;
+    padding: 20px 20px calc(20px + env(safe-area-inset-bottom));
     display: flex;
     justify-content: center;
   }
@@ -601,7 +631,7 @@
   }
 
   .settings-panel .settings-row {
-    max-width: 560px;
+    max-width: calc(var(--page-max) - 40px);
     margin: 0 auto;
   }
 
@@ -763,6 +793,85 @@
     color: var(--accent);
     border-color: var(--accent);
   }
+
+  /* ============================================================
+     RESPONSIVE LAYOUT
+     Phone (default):   single column, 600px max.
+     Tablet portrait:   single column, a bit wider.
+     iPad landscape /
+     desktop (>=900px): input panel in a sticky left sidebar, queue and
+                        library in the main column.
+     Wide desktop:      queue and library cards flow into two columns.
+     ============================================================ */
+  .layout-side, .layout-main { min-width: 0; }
+
+  @media (min-width: 700px) {
+    :root { --page-max: 760px; }
+  }
+
+  @media (min-width: 900px) {
+    :root { --page-max: 1200px; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+      gap: 24px;
+      align-items: start;
+    }
+
+    .layout-side {
+      position: sticky;
+      top: 20px;
+    }
+
+    .layout-side .input-section { margin-bottom: 0; }
+
+    #textInput { min-height: 220px; }
+
+    /* Queue starts level with the input panel instead of below its own
+       heading margin. */
+    .queue-header { margin-top: 4px; }
+  }
+
+  @media (min-width: 1400px) {
+    :root { --page-max: 1480px; }
+
+    .layout {
+      grid-template-columns: 380px minmax(0, 1fr);
+    }
+
+    #queueList,
+    #libraryList {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      align-items: start;
+    }
+
+    /* Grid gap replaces the cards' own margin-bottom, so restore the
+       spacing between the last row and the library below. */
+    #queueList { gap: 10px; margin-bottom: 10px; }
+    #queueList .queue-card { margin-bottom: 0; }
+
+    /* Library cards are separated by borders rather than gaps, so add a
+       vertical divider between the two columns. */
+    #libraryList .library-card:nth-child(odd) {
+      border-right: 1px solid var(--border);
+    }
+    #libraryList .library-card:nth-last-child(2):nth-child(odd) {
+      border-bottom: none;
+    }
+  }
+
+  /* Touch devices: bigger tap targets, and 16px form text so iOS never
+     auto-zooms on focus (backed up by the maximum-scale tweak in <head>). */
+  @media (pointer: coarse) {
+    .btn-icon { width: 40px; height: 40px; }
+    .btn-gear { width: 36px; height: 36px; font-size: 16px; }
+    .art-paste-target { width: 26px; height: 26px; bottom: -6px; right: -6px; }
+    .art-paste-target i { font-size: 12px; }
+    .edit-input, select { font-size: 16px; }
+    .btn-swap { width: 28px; height: 28px; font-size: 13px; }
+  }
 </style>
 </head>
 <body>
@@ -813,7 +922,8 @@
   </div>
 </div>
 
-<main>
+<main class="layout">
+  <div class="layout-side">
   <!-- Input Section -->
   <div class="input-section">
     <div class="toggle">
@@ -848,7 +958,9 @@
 
     <div class="error-banner" id="errorBanner"></div>
   </div>
+  </div>
 
+  <div class="layout-main">
 <!-- Queue -->
   <div id="queueSection" style="display:none;">
     <div class="queue-header">Queue</div>
@@ -869,6 +981,7 @@
         Load more
       </button>
     </div>
+  </div>
   </div>
 </main>
 
@@ -1707,7 +1820,7 @@ async function startGenerate() {
       <div class="art-paste-target" id="paste-${escHtml(key)}"
            contenteditable="true" tabindex="0"
            onpaste="handleArtPaste('${k}', event)"
-           title="Tap here, then paste an image (Ctrl+V)"><i class="fa-solid fa-clipboard"></i></div>
+           title="Tap here, then paste an image (Ctrl+V)"><i class="fa-solid fa-clipboard" contenteditable="false"></i></div>
     ` : '';
 
     const baseClass = artB64 ? 'card-art' : 'card-art-placeholder';
