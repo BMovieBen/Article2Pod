@@ -303,6 +303,53 @@ def update_article_metadata(slug, title, artist, album):
     print(f'[Article2Pod] Metadata updated for {slug}: "{title}" by {artist} ({album})')
     return True, None
 
+def set_custom_article_art(slug, image_bytes):
+    """Overwrite album art for a pending, comfyui-pipeline article with a
+    user-uploaded/pasted/dropped image -- same restriction as
+    update_article_metadata (pending + comfyui only). Crops/resizes to
+    the standard 500x500 used by every other art source in this pipeline
+    and overwrites temp/{slug}.jpg. Also cancels any pending ComfyUI art
+    generation for this item, in both the queue item and temp/{slug}.json
+    -- otherwise the pipeline would still run generate-art.py later and
+    silently overwrite what the user just chose. Returns (ok, error)."""
+    from utils import crop_image_bytes_to_square
+
+    temp      = get_temp_folder()
+    json_path = os.path.join(temp, f'{slug}.json')
+    jpg_path  = os.path.join(temp, f'{slug}.jpg')
+
+    with queue_lock:
+        queue = load_queue()
+        item  = next((i for i in queue if i['slug'] == slug), None)
+        if not item:
+            return False, 'Article not found in queue.'
+        if item['status'] != 'pending':
+            return False, 'Can only set custom art for pending articles.'
+        if item.get('pipeline_type', 'comfyui') != 'comfyui':
+            return False, 'Custom art is only available for text articles.'
+
+        try:
+            img = crop_image_bytes_to_square(image_bytes)
+        except Exception as e:
+            return False, f'Could not read that image: {e}'
+
+        img.save(jpg_path, 'JPEG', quality=90)
+
+        if os.path.isfile(json_path):
+            with open(json_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+            meta['album_art']           = jpg_path
+            meta['art_pending_comfyui'] = False
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(meta, f, indent=2, ensure_ascii=False)
+
+        item['album_art']           = jpg_path
+        item['art_pending_comfyui'] = False
+        save_queue(queue)
+
+    print(f'[Article2Pod] Custom art set for {slug}')
+    return True, None
+
 def find_mp3_for_slug(slug, title=''):
     """Find the MP3 in the output folder by title match."""
     import glob

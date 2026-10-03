@@ -270,6 +270,56 @@
     font-size: 20px;
   }
 
+  .card-art-editable {
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+
+  .card-art-editable:hover {
+    opacity: 0.8;
+  }
+
+  .card-art-editable:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .card-art-editable.drag-over {
+    outline: 2px dashed var(--accent);
+    outline-offset: 2px;
+  }
+
+  .art-wrapper {
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .art-paste-target {
+    position: absolute;
+    bottom: -4px;
+    right: -4px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    outline: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .art-paste-target:hover,
+  .art-paste-target:focus {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
   .card-info {
     flex: 1;
     min-width: 0;
@@ -829,6 +879,10 @@
   </button>
 </div>
 
+<input type="file" id="artFileInput"
+       accept="image/png,image/jpeg,image/gif,image/bmp,image/webp,image/*"
+       style="display:none" onchange="handleArtFileSelected(event)">
+
 <script>
   let mode       = 'url';
   let isProcessing = false;
@@ -850,6 +904,8 @@
   let pendingDefault  = '';     // staged but unsaved default change
   const voicePanelOpen = {};    // slug -> bool
   const editOriginal = {};      // slug -> {title, artist, album} snapshot for dirty-check on close
+  let artUploadTargetSlug = null;  // which card's art the shared file input is currently for
+  const MAX_ART_UPLOAD_BYTES = 20 * 1024 * 1024;  // 20MB sanity cap, not a hard architectural limit
   // Track which cards have output panel open
   const outputOpen = {};
 
@@ -870,6 +926,111 @@
 
   function clearError() {
     document.getElementById('errorBanner').style.display = 'none';
+  }
+
+  function triggerArtUpload(slug) {
+    artUploadTargetSlug = slug;
+    document.getElementById('artFileInput').click();
+  }
+
+  function handleArtFileSelected(event) {
+    const file = event.target.files && event.target.files[0];
+    event.target.value = '';  // reset so picking the same file again still fires change
+    if (file && artUploadTargetSlug) uploadArtFile(artUploadTargetSlug, file);
+  }
+
+  function handleArtPaste(slug, event) {
+    event.preventDefault();  // never let anything actually paste into the badge itself
+    const items = (event.clipboardData || window.clipboardData).items;
+    for (const item of items) {
+      if (item.type && item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) uploadArtFile(slug, file);
+        return;
+      }
+    }
+  }
+
+  function handleArtDragOver(slug, event) {
+    event.preventDefault();
+    const el = document.getElementById(`art-${slug}`);
+    if (el) el.classList.add('drag-over');
+  }
+
+  function handleArtDragLeave(slug, event) {
+    const el = document.getElementById(`art-${slug}`);
+    if (el) el.classList.remove('drag-over');
+  }
+
+  function handleArtDrop(slug, event) {
+    event.preventDefault();
+    const el = document.getElementById(`art-${slug}`);
+    if (el) el.classList.remove('drag-over');
+    const file = event.dataTransfer.files && event.dataTransfer.files[0];
+    if (file && file.type && file.type.startsWith('image/')) {
+      uploadArtFile(slug, file);
+    }
+  }
+
+  async function uploadArtFile(slug, file) {
+    if (file.size > MAX_ART_UPLOAD_BYTES) {
+      showError('That image is too large (max 20MB).');
+      return;
+    }
+
+    const el = document.getElementById(`art-${slug}`);
+    if (el) el.style.opacity = '0.5';
+
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload  = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('Could not read file.'));
+        reader.readAsDataURL(file);
+      });
+
+      const res  = await fetch('/api/queue/art', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({slug, image_data: dataUrl}),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showError(data.error || 'Could not set album art.');
+      } else if (data.album_art_b64) {
+        // Update in place -- works even while polling is paused (e.g.
+        // the metadata edit panel is open for this same card).
+        updateCardArtDisplay(slug, data.album_art_b64);
+      }
+    } catch (e) {
+      showError('Could not set album art.');
+    } finally {
+      const el2 = document.getElementById(`art-${slug}`);
+      if (el2) el2.style.opacity = '';
+    }
+  }
+
+  function updateCardArtDisplay(slug, dataUrl) {
+    const el = document.getElementById(`art-${slug}`);
+    if (!el) return;
+    if (el.tagName === 'IMG') {
+      el.src = dataUrl;
+      return;
+    }
+    // Was a placeholder div (no art yet) -- swap it for a real <img> in
+    // place, carrying over the same id/class/handlers so it stays an
+    // upload/paste/drop target afterward.
+    const img = document.createElement('img');
+    img.id        = el.id;
+    img.className = el.className.replace('card-art-placeholder', 'card-art');
+    img.src       = dataUrl;
+    img.alt       = '';
+    img.title       = el.title;
+    img.onclick     = el.onclick;
+    img.ondragover  = el.ondragover;
+    img.ondragleave = el.ondragleave;
+    img.ondrop      = el.ondrop;
+    el.replaceWith(img);
   }
 
   async function initLibrary() {
@@ -1538,9 +1699,38 @@ async function startGenerate() {
         card.className    = `queue-card status-${item.status}`;
         card.dataset.slug = item.slug;
 
+        // Hoisted here so both the art thumbnail (upload/paste/drop
+        // target) and the metadata edit fields further below can use it.
+        const isEditable = item.status === 'pending' &&
+                           (item.pipeline_type === 'comfyui' || !item.pipeline_type);
+
+        // Click and drop live on the thumbnail itself. Paste does NOT --
+        // clicking the thumbnail opens the file picker, which would steal
+        // focus and make it impossible to ever focus the thumbnail for a
+        // paste. Paste gets its own dedicated badge below instead, using a
+        // contenteditable element so iOS (which only offers a native
+        // Paste action over an editable region) has something to paste into.
+        const artInteractionAttrs = isEditable ? `
+          onclick="triggerArtUpload('${escHtml(escJs(item.slug))}')"
+          ondragover="handleArtDragOver('${escHtml(escJs(item.slug))}', event)"
+          ondragleave="handleArtDragLeave('${escHtml(escJs(item.slug))}', event)"
+          ondrop="handleArtDrop('${escHtml(escJs(item.slug))}', event)"
+          title="Click or drop an image to set custom art"
+        ` : '';
+
+        const pasteTargetHtml = isEditable ? `
+          <div class="art-paste-target" id="paste-${escHtml(item.slug)}"
+               contenteditable="true" tabindex="0"
+               onpaste="handleArtPaste('${escHtml(escJs(item.slug))}', event)"
+               title="Tap here, then paste an image (Ctrl+V)"><i class="fa-solid fa-clipboard"></i></div>
+        ` : '';
+
+        const artBaseClass = item.album_art_b64 ? 'card-art' : 'card-art-placeholder';
+        const artClass      = isEditable ? `${artBaseClass} card-art-editable` : artBaseClass;
+
         const artHtml = item.album_art_b64
-          ? `<img class="card-art" src="${item.album_art_b64}" alt="">`
-          : `<div class="card-art-placeholder">&#9834;</div>`;
+          ? `<div class="art-wrapper"><img id="art-${escHtml(item.slug)}" class="${artClass}" src="${item.album_art_b64}" alt="" ${artInteractionAttrs}>${pasteTargetHtml}</div>`
+          : `<div class="art-wrapper"><div id="art-${escHtml(item.slug)}" class="${artClass}" ${artInteractionAttrs}>&#9834;</div>${pasteTargetHtml}</div>`;
 
         // Gear is accent-colored if item has a custom voice set
         const gearClass = item.voice ? 'btn-gear customized' : 'btn-gear';
@@ -1607,9 +1797,6 @@ async function startGenerate() {
           : '';
 
         // Voice panel — only for pending items
-        const isEditable = item.status === 'pending' &&
-                           (item.pipeline_type === 'comfyui' || !item.pipeline_type);
-
         const voicePanel = isEditable ? `
           <div class="card-voice-panel"
                id="voice-panel-${escHtml(item.slug)}"

@@ -393,6 +393,8 @@ def get_author(soup):
             if text and not text.startswith('http'):
                 return clean_author(text)
     return ''
+
+def get_site_name(soup, base_url):
     og = soup.find('meta', property='og:site_name')
     if og and og.get('content', '').strip():
         return og['content'].strip()
@@ -493,6 +495,33 @@ def fetch_and_resize_image(img_url, size=(500, 500)):
         return img.crop((left, top, left + target_w, top + target_h))
     except Exception:
         return None
+
+def crop_image_bytes_to_square(image_bytes, size=(500, 500)):
+    """Decode arbitrary image bytes -- PNG, JPEG, GIF, BMP, WEBP, or
+    anything Pillow can open -- and return a center-cropped, resized
+    square RGB PIL Image, matching the same convention as
+    fetch_and_resize_image above. Format is sniffed from the bytes
+    themselves (Pillow's own header detection), not trusted from a
+    filename or declared MIME type, so it doesn't matter which of those
+    formats the caller actually sends. An animated GIF/WEBP yields its
+    first frame, since Image.open doesn't iterate frames on its own.
+    Unlike fetch_and_resize_image, this RAISES on invalid/undecodable
+    data rather than returning None -- the caller here is a direct user
+    upload, so a bad file should surface a clear error instead of
+    silently doing nothing."""
+    from PIL import Image
+    from io import BytesIO
+    img = Image.open(BytesIO(image_bytes))
+    img = img.convert('RGB')
+    target_w, target_h = size
+    orig_w, orig_h      = img.size
+    scale    = max(target_w / orig_w, target_h / orig_h)
+    scaled_w = int(orig_w * scale)
+    scaled_h = int(orig_h * scale)
+    img      = img.resize((scaled_w, scaled_h), Image.LANCZOS)
+    left = (scaled_w - target_w) // 2
+    top  = (scaled_h - target_h) // 2
+    return img.crop((left, top, left + target_w, top + target_h))
 
 JUNK_PATTERNS = [
     re.compile(r'^\s*copyright\s',                               re.IGNORECASE),

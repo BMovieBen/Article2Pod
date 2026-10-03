@@ -25,7 +25,8 @@ from pipeline import (
 from web_pipeline import (
     run_script, _should_switch_to_text,
     process_text_paste, finish_add, find_mp3_for_slug,
-    start_fetch, get_fetch_result, update_article_metadata
+    start_fetch, get_fetch_result, update_article_metadata,
+    set_custom_article_art
 )
 
 app = Flask(__name__, template_folder=os.path.join(SCRIPTS_DIR, 'templates'))
@@ -409,6 +410,43 @@ def api_queue_metadata():
     if not ok:
         return jsonify({'error': error}), 400
     return jsonify({'ok': True, 'title': title, 'artist': artist, 'album': album})
+
+@app.route('/api/queue/art', methods=['POST'])
+def api_queue_art():
+    """Set custom album art for a pending article from an uploaded,
+    pasted, or dropped image. Accepts a data URL
+    (data:image/...;base64,....) or raw base64 in image_data -- format
+    doesn't matter beyond that, crop_image_bytes_to_square sniffs it
+    from the bytes themselves."""
+    data       = request.json
+    slug       = data.get('slug', '').strip()
+    image_data = data.get('image_data', '')
+
+    if not slug:
+        return jsonify({'error': 'No slug specified.'}), 400
+    if not image_data:
+        return jsonify({'error': 'No image data provided.'}), 400
+
+    if image_data.strip().startswith('data:') and ',' in image_data:
+        image_data = image_data.split(',', 1)[1]
+
+    try:
+        image_bytes = base64.b64decode(image_data)
+    except Exception:
+        return jsonify({'error': 'Invalid image data.'}), 400
+
+    ok, error = set_custom_article_art(slug, image_bytes)
+    if not ok:
+        return jsonify({'error': error}), 400
+
+    from utils import get_temp_folder
+    jpg_path = os.path.join(get_temp_folder(), f'{slug}.jpg')
+    art_b64  = None
+    if os.path.isfile(jpg_path):
+        with open(jpg_path, 'rb') as f:
+            art_b64 = 'data:image/jpeg;base64,' + base64.b64encode(f.read()).decode('utf-8')
+
+    return jsonify({'ok': True, 'album_art_b64': art_b64})
 
 @app.route('/api/comfyui/status', methods=['GET'])
 def api_comfyui_status():
