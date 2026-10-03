@@ -40,7 +40,7 @@
     --radius:    12px;
     --mono:      'DM Mono', monospace;
     --sans:      'Syne', sans-serif;
-    --page-max:  600px;   /* widened by the breakpoints at the end of this stylesheet */
+    --page-max:  min(960px, 94vw);
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -792,74 +792,6 @@
   .btn-swap:hover {
     color: var(--accent);
     border-color: var(--accent);
-  }
-
-  /* ============================================================
-     RESPONSIVE LAYOUT
-     Phone (default):   single column, 600px max.
-     Tablet portrait:   single column, a bit wider.
-     iPad landscape /
-     desktop (>=900px): input panel in a sticky left sidebar, queue and
-                        library in the main column.
-     Wide desktop:      queue and library cards flow into two columns.
-     ============================================================ */
-  .layout-side, .layout-main { min-width: 0; }
-
-  @media (min-width: 700px) {
-    :root { --page-max: 760px; }
-  }
-
-  @media (min-width: 900px) {
-    :root { --page-max: 1200px; }
-
-    .layout {
-      display: grid;
-      grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
-      gap: 24px;
-      align-items: start;
-    }
-
-    .layout-side {
-      position: sticky;
-      top: 20px;
-    }
-
-    .layout-side .input-section { margin-bottom: 0; }
-
-    #textInput { min-height: 220px; }
-
-    /* Queue starts level with the input panel instead of below its own
-       heading margin. */
-    .queue-header { margin-top: 4px; }
-  }
-
-  @media (min-width: 1400px) {
-    :root { --page-max: 1480px; }
-
-    .layout {
-      grid-template-columns: 380px minmax(0, 1fr);
-    }
-
-    #queueList,
-    #libraryList {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      align-items: start;
-    }
-
-    /* Grid gap replaces the cards' own margin-bottom, so restore the
-       spacing between the last row and the library below. */
-    #queueList { gap: 10px; margin-bottom: 10px; }
-    #queueList .queue-card { margin-bottom: 0; }
-
-    /* Library cards are separated by borders rather than gaps, so add a
-       vertical divider between the two columns. */
-    #libraryList .library-card:nth-child(odd) {
-      border-right: 1px solid var(--border);
-    }
-    #libraryList .library-card:nth-last-child(2):nth-child(odd) {
-      border-bottom: none;
-    }
   }
 
   /* Touch devices: bigger tap targets, and 16px form text so iOS never
