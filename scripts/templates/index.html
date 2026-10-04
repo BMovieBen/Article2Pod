@@ -743,6 +743,16 @@
     box-sizing: border-box;
   }
 
+  /* Title is a textarea that auto-grows (see autoGrow) -- override the
+     global textarea defaults so it starts one line tall. */
+  textarea.edit-title {
+    min-height: 0;
+    resize: none;
+    overflow: hidden;
+    line-height: 1.35;
+    display: block;
+  }
+
   .edit-input:focus {
     border-color: var(--accent);
     position: relative;
@@ -801,6 +811,65 @@
     .art-paste-target i { font-size: 12px; }
     .edit-input, select { font-size: 16px; }
     .btn-swap { width: 28px; height: 28px; font-size: 13px; }
+  }
+
+  /* Phones in portrait: tighter page margins, and the per-card controls
+     drop to their own shaded, right-aligned strip under the metadata so
+     the title gets the full width beside the art. Wider screens keep the
+     layout above. */
+  @media (max-width: 600px) {
+    :root { --page-max: 100vw; }
+
+    header { padding: 16px 10px 0; }
+    main   { padding: 12px 10px 20px; }
+    .input-section { padding: 14px 12px; }
+
+    .card-main {
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 8px 12px;
+      padding: 10px 12px 0;
+    }
+    .card-info { flex: 1 1 0; }
+    .card-actions {
+      flex: 0 0 auto;
+      width: calc(100% + 24px);
+      margin: 2px -12px 0;
+      padding: 8px 12px;
+      justify-content: flex-end;
+      align-items: center;
+      border-top: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .card-title { -webkit-line-clamp: 4; }
+    .card-meta  { white-space: normal; }
+
+    /* Library: instead of one big bordered table, the header and each
+       podcast are separate cards with a gap between them, like the queue. */
+    .library-accordion {
+      background: none;
+      border: none;
+      border-radius: 0;
+      overflow: visible;
+    }
+    .library-header {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 10px;
+    }
+    .library-body { border-top: none; }
+    .library-card {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 10px;
+    }
+    .library-card:last-child { border-bottom: 1px solid var(--border); }
+    .library-load-more {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
   }
 </style>
 </head>
@@ -1363,6 +1432,7 @@
       if (titleDisplay) titleDisplay.style.display = 'none';
       if (metaDisplay)  metaDisplay.style.display  = 'none';
       if (editFieldsEl) editFieldsEl.style.display = '';
+      autoGrow(document.getElementById(`edit-title-${slug}`));
 
       await populateVoiceSelect(`voice-select-${slug}`, '');
       try {
@@ -1380,7 +1450,7 @@
           const t = document.getElementById(`edit-title-${slug}`);
           const a = document.getElementById(`edit-author-${slug}`);
           const s = document.getElementById(`edit-site-${slug}`);
-          if (t) t.value = editOriginal[slug].title;
+          if (t) { t.value = editOriginal[slug].title; autoGrow(t); }
           if (a) a.value = editOriginal[slug].artist;
           if (s) s.value = editOriginal[slug].album;
         }
@@ -1439,6 +1509,7 @@
     const tmp = t.value;
     t.value   = a.value;
     a.value   = tmp;
+    autoGrow(t);
   }
 
   async function setCardVoice(slug, voice) {
@@ -1952,8 +2023,9 @@ async function startGenerate() {
         const editFields = (isEditable || item.status === 'done') ? `
           <div class="card-edit-fields" id="edit-fields-${escHtml(item.slug)}" style="display:none;">
             <div class="edit-title-author-group">
-              <input type="text" class="edit-input" id="edit-title-${escHtml(item.slug)}"
-                     placeholder="Title" value="${escHtml(item.title || '')}">
+              <textarea class="edit-input edit-title" id="edit-title-${escHtml(item.slug)}" rows="1"
+                        placeholder="Title" oninput="autoGrow(this)"
+                        onkeydown="if (event.key === 'Enter') event.preventDefault()">${escHtml(item.title || '')}</textarea>
               <input type="text" class="edit-input" id="edit-author-${escHtml(item.slug)}"
                      placeholder="Author" value="${escHtml(item.artist || '')}">
               <button class="btn-swap" type="button"
@@ -2008,6 +2080,7 @@ async function startGenerate() {
           if (titleDisplay) titleDisplay.style.display = 'none';
           if (metaDisplay)  metaDisplay.style.display  = 'none';
           if (editFieldsEl) editFieldsEl.style.display = '';
+          autoGrow(document.getElementById(`edit-title-${item.slug}`));
         }
 
       } catch (e) {
@@ -2108,8 +2181,9 @@ async function startGenerate() {
               </div>
               <div class="card-edit-fields" id="lib-edit-${safeId}" style="display:none;">
                 <div class="edit-title-author-group">
-                  <input type="text" class="edit-input" id="lib-edit-title-${safeId}"
-                         placeholder="Title" value="${escHtml(item.title)}">
+                  <textarea class="edit-input edit-title" id="lib-edit-title-${safeId}" rows="1"
+                            placeholder="Title" oninput="autoGrow(this)"
+                            onkeydown="if (event.key === 'Enter') event.preventDefault()">${escHtml(item.title)}</textarea>
                   <input type="text" class="edit-input" id="lib-edit-author-${safeId}"
                          placeholder="Author" value="${escHtml(item.author)}">
                   <button class="btn-swap" type="button"
@@ -2145,11 +2219,21 @@ async function startGenerate() {
     });
   }
 
+  // Title fields are textareas that grow to fit their text, so long titles
+  // wrap instead of scrolling sideways. Must run while the field is visible
+  // (a hidden element has no scrollHeight).
+  function autoGrow(el) {
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = el.scrollHeight + 2 + 'px';
+  }
+
   function swapLibTitleAuthor(safeId) {
     const t = document.getElementById(`lib-edit-title-${safeId}`);
     const a = document.getElementById(`lib-edit-author-${safeId}`);
     if (!t || !a) return;
     [t.value, a.value] = [a.value, t.value];
+    autoGrow(t);
   }
 
   // Gear on a library card: open shows the edit fields; closing saves them
@@ -2170,6 +2254,7 @@ async function startGenerate() {
       fields.style.display  = '';
       titleEl.style.display = 'none';
       metaEl.style.display  = 'none';
+      autoGrow(t);
       return;
     }
 
