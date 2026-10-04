@@ -26,7 +26,7 @@ from web_pipeline import (
     run_script, _should_switch_to_text,
     process_text_paste, finish_add, find_mp3_for_slug,
     start_fetch, get_fetch_result, update_article_metadata,
-    set_custom_article_art, set_library_mp3_art
+    set_custom_article_art, set_library_mp3_art, set_library_mp3_metadata
 )
 
 app = Flask(__name__, template_folder=os.path.join(SCRIPTS_DIR, 'templates'))
@@ -422,6 +422,41 @@ def _decode_image_data(image_data):
     except Exception:
         return None
 
+def _download_image(url):
+    """Fetch an image from an http(s) URL -- used when the clipboard only
+    carries a link to the image (Firefox on iOS copies images that way).
+    Done server-side to avoid browser CORS limits. Returns (bytes, error)."""
+    import requests
+    url = (url or '').strip()
+    if not url.startswith(('http://', 'https://')):
+        return None, 'That link is not an image URL.'
+    try:
+        r = requests.get(url, timeout=15, stream=True, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                          '(KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+            'Accept': 'image/*,*/*;q=0.8',
+        })
+        r.raise_for_status()
+        data = b''
+        for chunk in r.iter_content(65536):
+            data += chunk
+            if len(data) > 20 * 1024 * 1024:
+                return None, 'That image is too large (max 20MB).'
+        return data, None
+    except Exception as e:
+        return None, f'Could not download that image: {e}'
+
+def _resolve_image_bytes(data):
+    """Image bytes from either image_data (data URL / base64) or image_url.
+    Returns (bytes, error, status)."""
+    if data.get('image_url'):
+        img, err = _download_image(data['image_url'])
+        return img, err, 400
+    if not data.get('image_data'):
+        return None, 'No image data provided.', 400
+    img = _decode_image_data(data['image_data'])
+    return img, (None if img is not None else 'Invalid image data.'), 400
+
 def _jpeg_data_url(jpg_bytes):
     return 'data:image/jpeg;base64,' + base64.b64encode(jpg_bytes).decode('utf-8')
 
@@ -432,21 +467,38 @@ def api_queue_art():
     the art embedded in the output MP3."""
     data       = request.json
     slug       = data.get('slug', '').strip()
-    image_data = data.get('image_data', '')
 
     if not slug:
         return jsonify({'error': 'No slug specified.'}), 400
-    if not image_data:
-        return jsonify({'error': 'No image data provided.'}), 400
 
-    image_bytes = _decode_image_data(image_data)
-    if image_bytes is None:
-        return jsonify({'error': 'Invalid image data.'}), 400
+    image_bytes, error, status = _resolve_image_bytes(data)
+    if error:
+        return jsonify({'error': error}), status
 
     ok, error, jpg_bytes = set_custom_article_art(slug, image_bytes)
     if not ok:
         return jsonify({'error': error}), 400
     return jsonify({'ok': True, 'album_art_b64': _jpeg_data_url(jpg_bytes)})
+
+@app.route('/api/library/metadata', methods=['PATCH'])
+def api_library_metadata():
+    """Edit title/author/site of a library MP3, by relative path. The file
+    is renamed to match, so the response carries its new path."""
+    data     = request.json
+    rel_path = data.get('path', '')
+    title    = data.get('title', '').strip()
+    artist   = data.get('artist', '').strip()
+    album    = data.get('album', '').strip()
+
+    if not rel_path:
+        return jsonify({'error': 'No path provided.'}), 400
+    if not title:
+        return jsonify({'error': 'Title cannot be empty.'}), 400
+
+    ok, error, new_path = set_library_mp3_metadata(rel_path, title, artist, album)
+    if not ok:
+        return jsonify({'error': error}), 400
+    return jsonify({'ok': True, 'path': new_path})
 
 @app.route('/api/library/art', methods=['POST'])
 def api_library_art():
@@ -454,12 +506,9 @@ def api_library_art():
     from utils import get_output_dir
     data       = request.json
     rel_path   = data.get('path')
-    image_data = data.get('image_data', '')
 
     if not rel_path:
         return jsonify({'error': 'No path provided.'}), 400
-    if not image_data:
-        return jsonify({'error': 'No image data provided.'}), 400
 
     output_dir = get_output_dir()
     mp3_path   = os.path.normpath(os.path.join(output_dir, rel_path))
@@ -468,9 +517,9 @@ def api_library_art():
     if not os.path.isfile(mp3_path):
         return jsonify({'error': 'File not found.'}), 404
 
-    image_bytes = _decode_image_data(image_data)
-    if image_bytes is None:
-        return jsonify({'error': 'Invalid image data.'}), 400
+    image_bytes, error, status = _resolve_image_bytes(data)
+    if error:
+        return jsonify({'error': error}), status
 
     ok, error, jpg_bytes = set_library_mp3_art(mp3_path, image_bytes)
     if not ok:

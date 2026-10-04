@@ -327,8 +327,6 @@
        is sized down separately below. */
     font-size: 16px;
     line-height: 1;
-    overflow: hidden;
-    caret-color: transparent;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -986,15 +984,78 @@
   }
 
   function handleArtPaste(slug, event) {
-    event.preventDefault();  // never let anything actually paste into the badge itself
-    const items = (event.clipboardData || window.clipboardData).items;
-    for (const item of items) {
-      if (item.type && item.type.startsWith('image/')) {
-        const file = item.getAsFile();
-        if (file) uploadArtFile(slug, file);
-        return;
+    const badge = event.currentTarget;
+    const cd    = event.clipboardData || window.clipboardData;
+    let file = null;
+    if (cd) {
+      // Prefer .files (iOS puts pasted photos there), fall back to .items
+      for (const f of (cd.files || [])) {
+        if (f.type && f.type.startsWith('image/')) { file = f; break; }
+      }
+      if (!file) {
+        for (const item of (cd.items || [])) {
+          if (item.type && item.type.startsWith('image/')) {
+            file = item.getAsFile();
+            if (file) break;
+          }
+        }
       }
     }
+    // Firefox on iOS copies an image as just a link to it (text/uri-list).
+    let url = null;
+    if (!file && cd) {
+      const raw = (cd.getData('text/uri-list') || cd.getData('text/plain') || '').trim();
+      const first = raw.split(/\r?\n/).find(l => l && !l.startsWith('#'));
+      if (first && /^https?:\/\//i.test(first.trim())) url = first.trim();
+    }
+    if (url) {
+      event.preventDefault();
+      if (badge && badge.blur) badge.blur();
+      uploadArtFile(slug, url);
+      return;
+    }
+    if (file) {
+      event.preventDefault();  // never let anything actually paste into the badge itself
+      if (badge && badge.blur) badge.blur();  // release focus so polling resumes
+      uploadArtFile(slug, file);
+    }
+    // else: let iOS insert the image into the editable badge -- picked up
+    // by handleArtInput below.
+  }
+
+  // Fallback for iOS: the keyboard's "Paste" suggestion can insert the photo
+  // into the contenteditable as an <img> without exposing it via the paste
+  // event's clipboardData. Grab it from the DOM, upload it, and clean up.
+  async function handleArtInput(slug, event) {
+    const badge = event.currentTarget;
+    const img   = badge.querySelector('img');
+    if (!img) {
+      // Text or other junk got pasted -- discard it, restore the icon.
+      if (badge.textContent.trim()) {
+        badge.innerHTML = '<i class="fa-solid fa-clipboard"></i>';
+        showError('Clipboard did not contain an image.');
+        window.scrollTo({top: 0, behavior: 'smooth'});
+      }
+      return;
+    }
+    const src = img.src;
+    badge.innerHTML = '<i class="fa-solid fa-clipboard"></i>';
+    if (badge.blur) badge.blur();
+    try {
+      const blob = await (await fetch(src)).blob();
+      await uploadArtFile(slug, blob);
+    } catch (e) {
+      showError('Could not read the pasted image.');
+      window.scrollTo({top: 0, behavior: 'smooth'});
+    }
+  }
+
+  // Bring the card whose paste badge was just tapped into view. Delayed so
+  // it runs after the iOS keyboard has finished resizing the viewport.
+  function scrollCardIntoView(el) {
+    const card = el.closest('.queue-card, .library-card');
+    if (!card) return;
+    setTimeout(() => card.scrollIntoView({block: 'center', behavior: 'smooth'}), 350);
   }
 
   function handleArtDragOver(slug, event) {
@@ -1019,7 +1080,10 @@
   }
 
   async function uploadArtFile(slug, file) {
-    if (file.size > MAX_ART_UPLOAD_BYTES) {
+    // `file` may be a File/Blob, or a string URL (clipboards that only
+    // carry a link to the image) which the server downloads itself.
+    const isUrl = typeof file === 'string';
+    if (!isUrl && file.size > MAX_ART_UPLOAD_BYTES) {
       showError('That image is too large (max 20MB).');
       return;
     }
@@ -1028,12 +1092,12 @@
     if (el) el.style.opacity = '0.5';
 
     try {
-      const dataUrl = await new Promise((resolve, reject) => {
+      const payload = isUrl ? {image_url: file} : {image_data: await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload  = () => resolve(reader.result);
         reader.onerror = () => reject(new Error('Could not read file.'));
         reader.readAsDataURL(file);
-      });
+      })};
 
       // Same art target helpers serve queue cards (keyed by slug) and
       // library cards (keyed by a per-render id mapped to the MP3 path).
@@ -1041,8 +1105,8 @@
       const res  = await fetch(libPath ? '/api/library/art' : '/api/queue/art', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(libPath ? {path: libPath, image_data: dataUrl}
-                                     : {slug, image_data: dataUrl}),
+        body: JSON.stringify(libPath ? {path: libPath, ...payload}
+                                     : {slug, ...payload}),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -1673,7 +1737,11 @@ async function startGenerate() {
 
   async function pollQueue() {
     // Don't poll while a delete confirmation is showing
-    if (confirmingSlug || voicePanelOpenCount > 0) {
+    // A focused paste badge must not be re-rendered out from under the
+    // user -- iOS dismisses its Paste menu when the element is replaced.
+    const ae = document.activeElement;
+    if (confirmingSlug || voicePanelOpenCount > 0 ||
+        (ae && ae.classList && ae.classList.contains('art-paste-target'))) {
       schedulePoll(1000);  // check again soon in case it clears
       return;
     }
@@ -1751,8 +1819,10 @@ async function startGenerate() {
     const pasteTargetHtml = editable ? `
       <div class="art-paste-target" id="paste-${escHtml(key)}"
            contenteditable="true" tabindex="0"
+           onfocus="scrollCardIntoView(this)"
            onpaste="handleArtPaste('${k}', event)"
-           title="Tap here, then paste an image (Ctrl+V)"><i class="fa-solid fa-clipboard" contenteditable="false"></i></div>
+           oninput="handleArtInput('${k}', event)"
+           title="Tap here, then paste an image (Ctrl+V)"><i class="fa-solid fa-clipboard"></i></div>
     ` : '';
 
     const baseClass = artB64 ? 'card-art' : 'card-art-placeholder';
@@ -1797,6 +1867,11 @@ async function startGenerate() {
           actionHtml = `<div class="spinner"></div>`;
         } else if (item.status === 'done') {
           actionHtml = `
+            <button class="btn-gear"
+              onclick="toggleCardVoice('${escHtml(escJs(item.slug))}')"
+              title="Edit details"
+              id="gear-${escHtml(item.slug)}">
+              <i class="fa-solid fa-gear"></i></button>
             <a class="btn-icon success"
               href="/api/download/${escHtml(item.slug)}"
               download
@@ -1874,7 +1949,7 @@ async function startGenerate() {
         // gear toggle as the voice panel above (toggleCardVoice). Lets
         // the user fix scraper title/author/site mis-mapping by hand,
         // for any pending item.
-        const editFields = isEditable ? `
+        const editFields = (isEditable || item.status === 'done') ? `
           <div class="card-edit-fields" id="edit-fields-${escHtml(item.slug)}" style="display:none;">
             <div class="edit-title-author-group">
               <input type="text" class="edit-input" id="edit-title-${escHtml(item.slug)}"
@@ -1917,7 +1992,7 @@ async function startGenerate() {
 
         // Restore an open edit panel (and populate the voice dropdown,
         // when there is one) after card is in DOM
-        if (item.status === 'pending' && voicePanelOpen[item.slug]) {
+        if ((item.status === 'pending' || item.status === 'done') && voicePanelOpen[item.slug]) {
           const panel = document.getElementById(`voice-panel-${item.slug}`);
           if (panel) {
             panel.style.display = '';
@@ -2027,12 +2102,31 @@ async function startGenerate() {
           <div class="card-main">
             ${artHtml}
             <div class="card-info">
-              <div class="card-title">${escHtml(item.title)}</div>
-              <div class="card-meta">
+              <div class="card-title" id="lib-title-${safeId}">${escHtml(item.title)}</div>
+              <div class="card-meta" id="lib-meta-${safeId}">
                 ${escHtml(item.site)}${item.site && item.author ? ' &middot; ' : ''}${escHtml(item.author)}
+              </div>
+              <div class="card-edit-fields" id="lib-edit-${safeId}" style="display:none;">
+                <div class="edit-title-author-group">
+                  <input type="text" class="edit-input" id="lib-edit-title-${safeId}"
+                         placeholder="Title" value="${escHtml(item.title)}">
+                  <input type="text" class="edit-input" id="lib-edit-author-${safeId}"
+                         placeholder="Author" value="${escHtml(item.author)}">
+                  <button class="btn-swap" type="button"
+                          onclick="swapLibTitleAuthor('${safeId}')"
+                          title="Swap title and author">
+                    <i class="fa-solid fa-arrows-up-down"></i>
+                  </button>
+                </div>
+                <input type="text" class="edit-input" id="lib-edit-site-${safeId}"
+                       placeholder="Site" value="${escHtml(item.site)}">
               </div>
             </div>
             <div class="card-actions" id="lib-actions-${safeId}">
+              <button class="btn-gear"
+                onclick="toggleLibEdit('${safeId}')"
+                title="Edit details">
+                <i class="fa-solid fa-gear"></i></button>
               <a class="btn-icon success"
                 href="/api/library/download?path=${encodeURIComponent(item.path)}"
                 download="${escHtml(item.title)}.mp3"
@@ -2049,6 +2143,70 @@ async function startGenerate() {
         console.error('Library card render error:', item.title, e);
       }
     });
+  }
+
+  function swapLibTitleAuthor(safeId) {
+    const t = document.getElementById(`lib-edit-title-${safeId}`);
+    const a = document.getElementById(`lib-edit-author-${safeId}`);
+    if (!t || !a) return;
+    [t.value, a.value] = [a.value, t.value];
+  }
+
+  // Gear on a library card: open shows the edit fields; closing saves them
+  // (if changed) into the MP3's tags. The file is renamed to match, so the
+  // card's path is updated from the response.
+  async function toggleLibEdit(safeId) {
+    const artKey  = `lib-${safeId}`;
+    const fields  = document.getElementById(`lib-edit-${safeId}`);
+    const titleEl = document.getElementById(`lib-title-${safeId}`);
+    const metaEl  = document.getElementById(`lib-meta-${safeId}`);
+    const t = document.getElementById(`lib-edit-title-${safeId}`);
+    const a = document.getElementById(`lib-edit-author-${safeId}`);
+    const s = document.getElementById(`lib-edit-site-${safeId}`);
+    if (!fields || !t || !a || !s) return;
+
+    if (fields.style.display === 'none') {
+      editOriginal[artKey] = {title: t.value, artist: a.value, album: s.value};
+      fields.style.display  = '';
+      titleEl.style.display = 'none';
+      metaEl.style.display  = 'none';
+      return;
+    }
+
+    const orig      = editOriginal[artKey] || {};
+    const newTitle  = t.value.trim();
+    const newAuthor = a.value.trim();
+    const newSite   = s.value.trim();
+    delete editOriginal[artKey];
+
+    if (newTitle !== orig.title || newAuthor !== orig.artist || newSite !== orig.album) {
+      try {
+        const res  = await fetch('/api/library/metadata', {
+          method: 'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({path: libArtPaths[artKey], title: newTitle,
+                                artist: newAuthor, album: newSite}),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          showError(data.error || 'Could not save metadata.');
+          t.value = orig.title; a.value = orig.artist; s.value = orig.album;
+        } else {
+          libArtPaths[artKey] = data.path;
+          const card = fields.closest('.library-card');
+          if (card) card.dataset.libpath = data.path;
+          titleEl.textContent = newTitle;
+          metaEl.textContent  = (newSite && newAuthor)
+            ? `${newSite} · ${newAuthor}` : (newSite || newAuthor);
+        }
+      } catch (e) {
+        showError('Could not save metadata.');
+      }
+    }
+
+    fields.style.display  = 'none';
+    titleEl.style.display = '';
+    metaEl.style.display  = '';
   }
 
   function confirmLibDelete(path, title) {

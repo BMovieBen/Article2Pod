@@ -284,8 +284,20 @@ def update_article_metadata(slug, title, artist, album):
         item  = next((i for i in queue if i['slug'] == slug), None)
         if not item:
             return False, 'Article not found in queue.'
+        if item['status'] == 'done':
+            mp3_path = find_mp3_for_slug(slug, item.get('title', ''))
+            if not mp3_path:
+                return False, 'Could not find the finished MP3 to update.'
+            ok, error, _ = update_mp3_metadata(mp3_path, title, artist, album)
+            if not ok:
+                return False, error
+            item['title']  = title
+            item['artist'] = artist
+            item['album']  = album
+            save_queue(queue)
+            return True, None
         if item['status'] != 'pending':
-            return False, 'Can only edit metadata for pending articles.'
+            return False, 'Can only edit metadata for pending or finished articles.'
 
         meta = _load_sidecar(json_path, slug)
         meta['title']           = title
@@ -314,6 +326,81 @@ def update_article_metadata(slug, title, artist, album):
 
     print(f'[Article2Pod] Metadata updated for {slug}: "{title}" by {artist} ({album})')
     return True, None
+
+def update_mp3_metadata(mp3_path, title, artist, album):
+    """Rewrite title/author/site tags in a finished MP3 (same tag mapping as
+    tag-mp3.py: TIT2=title, TPE1/TPE2=site, TALB=author), then move/rename
+    the file to match the output layout Site/Author/Site - Title.mp3.
+    Cover art and track number are left alone. Returns (ok, error, new_path)."""
+    import shutil
+    from mutagen.id3 import ID3, TIT2, TPE1, TPE2, TALB, ID3NoHeaderError
+    from utils import get_output_dir, sanitize_filename
+
+    site   = album  or 'Unknown Site'
+    author = artist or 'Unknown Author'
+
+    site_part  = sanitize_filename(site)
+    safe_title = sanitize_filename(title)
+    max_title  = max(10, 150 - len(site_part) - len(' - .mp3'))
+    filename   = f'{site_part} - {safe_title[:max_title].rstrip()}.mp3'
+
+    output_dir  = get_output_dir()
+    dest_folder = os.path.join(output_dir, sanitize_filename(site),
+                               sanitize_filename(author))
+    dest_path   = os.path.join(dest_folder, filename)
+
+    moving = os.path.normcase(os.path.abspath(dest_path)) != \
+             os.path.normcase(os.path.abspath(mp3_path))
+    if moving and os.path.exists(dest_path):
+        return False, 'Another MP3 with that title, author and site already exists.', None
+
+    try:
+        try:
+            tags = ID3(mp3_path)
+        except ID3NoHeaderError:
+            tags = ID3()
+        tags.add(TIT2(encoding=3, text=title))
+        tags.add(TPE1(encoding=3, text=site))
+        tags.add(TPE2(encoding=3, text=site))
+        tags.add(TALB(encoding=3, text=author))
+        tags.save(mp3_path)
+    except Exception as e:
+        return False, f'Could not update MP3 tags: {e}', None
+
+    if moving:
+        old_parent = os.path.dirname(mp3_path)
+        try:
+            os.makedirs(dest_folder, exist_ok=True)
+            shutil.move(mp3_path, dest_path)
+        except Exception as e:
+            return False, f'Tags updated, but could not move file: {e}', None
+        # Clean up folders left empty by the move
+        for folder in [old_parent, os.path.dirname(old_parent)]:
+            if os.path.normcase(os.path.normpath(folder)) != \
+               os.path.normcase(os.path.normpath(output_dir)):
+                try:
+                    if os.path.isdir(folder) and not os.listdir(folder):
+                        os.rmdir(folder)
+                except Exception:
+                    pass
+
+    print(f'[Article2Pod] MP3 metadata updated: {dest_path}')
+    return True, None, dest_path
+
+def set_library_mp3_metadata(rel_path, title, artist, album):
+    """Edit tags of a library MP3 by output-relative path. Returns
+    (ok, error, new_rel_path)."""
+    from utils import get_output_dir
+    output_dir = get_output_dir()
+    mp3_path   = os.path.normpath(os.path.join(output_dir, rel_path))
+    if not mp3_path.startswith(os.path.normpath(output_dir)):
+        return False, 'Invalid path.', None
+    if not os.path.isfile(mp3_path):
+        return False, 'File not found.', None
+    ok, error, new_path = update_mp3_metadata(mp3_path, title, artist, album)
+    if not ok:
+        return False, error, None
+    return True, None, os.path.relpath(new_path, output_dir)
 
 def write_mp3_art(mp3_path, jpg_bytes):
     """Replace the embedded cover art (APIC) in an already-tagged MP3,
