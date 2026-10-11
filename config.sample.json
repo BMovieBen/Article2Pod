@@ -1,44 +1,112 @@
+// Article2Pod configuration.
+// Copy this file to config.json and edit the values for your system.
+// "//" comments are allowed. Paths on Windows need doubled backslashes (\\).
+// Only the keys marked REQUIRED must be set; everything else has a default.
 {
+  // ───────────────────────── Voice ─────────────────────────
+  // REQUIRED. Default voice sample (an mp3 in voice_folder). Use "shuffle" for a random one.
+  // The gear icon in the web UI rewrites this line.
   "voice_file": "your-voice-sample.mp3",
+  // Folder holding your voice sample mp3s. Default: Article2Pod\voices
+  "voice_folder": "C:\\ComfyUI\\Article2Pod\\voices",
+
+  // ───────────────────────── Web interface ─────────────────────────
+  // Port for the web UI. Default: 8080
   "web_port": 8080,
+  // Queue save file, relative to the Article2Pod folder. Default: queue.json
   "queue_file": "queue.json",
+  // Console logging: "verbose", "on_error" or "off"
   "log_level": "on_error",
-  "clipboard_domains": [
-    "example-paywalled-site.com"
-  ],
+
+  // ───────────────────────── ComfyUI launch ─────────────────────────
+  // REQUIRED. Address of the ComfyUI server Article2Pod starts and talks to.
   "comfy_url": "http://127.0.0.1:8000",
+  // Address ComfyUI binds to. Default 0.0.0.0 (reachable on your LAN). Use 127.0.0.1 for this PC only.
+  // "comfy_listen_host": "0.0.0.0",
+  // REQUIRED. Your ComfyUI folder.
   "comfy_base": "C:\\ComfyUI",
+  // REQUIRED. Python inside ComfyUI's virtual environment.
   "comfy_venv_python": "C:\\ComfyUI\\.venv\\Scripts\\python.exe",
+  // REQUIRED. Location of ComfyUI Desktop's app files, relative to %LOCALAPPDATA%.
+  // Only change this if you have a non-standard install.
   "comfy_electron_relative": "Programs\\@comfyorgcomfyui-electron\\resources\\ComfyUI",
+  // Seconds to wait for ComfyUI to come up. Raise for slow machines or big models. Default: 120
+  "comfy_startup_timeout": 120,
+  // Extra command-line flags passed to ComfyUI, e.g. ["--fast"]
+  "comfy_extra_args": [],
+  // Model folders to register with ComfyUI (Comfy Desktop keeps models outside the install).
+  // Accepts one path or a list. Optional.
   "comfy_shared_models_path": [
     "C:\\ComfyUI\\models",
     "C:\\Users\\yourname\\AppData\\Local\\Comfy-Desktop\\ComfyUI-Shared\\models"
   ],
+  // A second install's custom_nodes folder to also load nodes from. Optional.
   "comfy_extra_custom_nodes_path": "C:\\Users\\yourname\\AppData\\Local\\Comfy-Desktop\\ComfyUI-Installs\\ComfyUI\\ComfyUI\\custom_nodes",
-  "comfy_startup_timeout": 120,
-  "comfy_extra_args": [],
-  "generation_logging_enabled": false,
-  "chunk_word_count": 1400,
-  "audio_normalize_enabled": false,
-  "art_sources": ["website", "image_search", "comfyui_generate", "favicon", "default"],
-  "art_workflow_file": "workflow\\art-workflow-api.json",
-  "art_prompt_node_title": "Positive Prompt",
-  "art_save_node_class": "SaveImage",
-  "art_generation_timeout": 300,
-  "workflow_file": "workflow\\workflow-api.json",
-  "audio_output_prefix": "audio/podcast",
+
+  // ───────────────────────── Folders and files ─────────────────────────
+  // REQUIRED. ComfyUI input folder. The article text and voice sample are placed here.
   "input_folder": "C:\\ComfyUI\\input",
+  // REQUIRED. Where ComfyUI drops generated mp3s before they get tagged.
   "audio_folder": "C:\\ComfyUI\\output\\audio",
+  // REQUIRED. ComfyUI output root.
   "output_folder": "C:\\ComfyUI\\output",
-  "voice_folder": "C:\\ComfyUI\\Article2Pod\\voices",
+  // REQUIRED. Track number log, relative to the Article2Pod folder.
   "track_log": "log\\track-log.json",
+
+  // ───────────────────────── Audio generation ─────────────────────────
+  // REQUIRED. Audio workflow (ComfyUI API format), relative to the Article2Pod folder.
+  "workflow_file": "workflow\\workflow-api.json",
+  // REQUIRED. Filename prefix of your workflow's SaveAudioMP3 node.
+  "audio_output_prefix": "audio/podcast",
+  // Long articles are split into chunks of about this many words. Default: 1400
+  "chunk_word_count": 1400,
+  // Normalize loudness with ffmpeg after generation. Default: false
+  "audio_normalize_enabled": false,
+  // Save a log of each generation run. Default: true
+  "generation_logging_enabled": false,
+
+  // ───────────────────────── Album art ─────────────────────────
+  // Sources tried in order until one works:
+  //   website          the article's own image
+  //   image_search     web image search
+  //   comfyui_generate generate one with ComfyUI
+  //   favicon          the site's icon
+  //   default          default_art.jpg
+  //   none             stop here and use no art
+  "art_sources": ["website", "image_search", "comfyui_generate", "favicon", "default"],
+  // Art workflow (ComfyUI API format), relative to the Article2Pod folder.
+  "art_workflow_file": "workflow\\art-workflow-api.json",
+  // Title of the workflow node that holds the text prompt. Leave empty to auto-detect
+  // when the workflow has just one prompt node (CLIPTextEncode).
+  "art_prompt_node_title": "",
+  // Class of the workflow node that saves the image. Default: SaveImage
+  "art_save_node_class": "SaveImage",
+  // Seconds to wait for art generation. Default: 300
+  "art_generation_timeout": 300,
+  // Optional. Text in your workflow's prompt node to swap for the article title,
+  // instead of replacing the whole prompt with the built-in template.
+  // "art_prompt_placeholder": "{title}",
+
+  // ───────────────────────── Article scraping ─────────────────────────
+  // User agent sent when fetching pages. REQUIRED.
   "user_agent": "Mozilla/5.0",
+  // Sites that block scraping or are paywalled. These go straight to paste mode.
+  "clipboard_domains": [
+    "example-paywalled-site.com"
+  ],
+  // Anything after one of these phrases is cut from the article (newsletter pitches, ads, etc.)
   "ad_strip_markers": [
     "Example: Sign up for our newsletter"
   ],
+  // Find and replace in the text before speech, to fix mispronunciations.
   "phonetic_replacements": {
     "2026": "twenty twenty six"
   },
+
+  // ───────────────────────── Per-site overrides ─────────────────────────
+  // Settings for one site. Matches the domain and its subdomains.
+  //   voice_file  voice to use for this site
+  //   art_path    image to always use as the art (relative to the Article2Pod folder)
   "domain_overrides": {
     "sample.com": {
       "voice_file": "your-voice-sample.mp3",

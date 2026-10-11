@@ -1,7 +1,7 @@
 # app.py
 # Article2Pod Web UI - Flask routes
 
-import os, sys, json, base64, glob, logging
+import os, re, sys, json, base64, glob, logging
 from flask import Flask, request, jsonify, render_template, send_file
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -360,13 +360,17 @@ def api_settings():
     if not voice:
         return jsonify({'error': 'No voice specified.'}), 400
 
-    # Read, update, write config
+    # Edit just the voice_file line so comments in config.json survive
     config_path = os.path.join(APP_DIR, 'config.json')
     with open(config_path, 'r', encoding='utf-8') as f:
-        config = json.load(f)
-    config['voice_file'] = voice
+        text = f.read()
+    new_line = '"voice_file": ' + json.dumps(voice, ensure_ascii=False)
+    text, n = re.subn(r'"voice_file"\s*:\s*"(?:[^"\\]|\\.)*"',
+                      lambda m: new_line, text, count=1)
+    if not n:
+        return jsonify({'error': 'voice_file not found in config.json.'}), 500
     with open(config_path, 'w', encoding='utf-8') as f:
-        json.dump(config, f, indent=2, ensure_ascii=False)
+        f.write(text)
 
     print(f'[Article2Pod] Default voice set to: {voice}')
     return jsonify({'ok': True})

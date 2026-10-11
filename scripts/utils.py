@@ -10,10 +10,34 @@ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 APP_DIR     = os.path.dirname(SCRIPTS_DIR)
 CONFIG_FILE = os.path.join(APP_DIR, 'config.json')
 
+def strip_json_comments(text):
+    """Remove // line comments (full-line or trailing) from JSON text so
+    config.json can be annotated. Slashes inside strings (e.g. URLs) are
+    left alone."""
+    out, in_str, esc, i = [], False, False, 0
+    while i < len(text):
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if esc:            esc = False
+            elif c == '\\':   esc = True
+            elif c == '"':     in_str = False
+        elif c == '"':
+            in_str = True
+            out.append(c)
+        elif c == '/' and text[i + 1:i + 2] == '/':
+            while i < len(text) and text[i] != '\n':
+                i += 1
+            continue
+        else:
+            out.append(c)
+        i += 1
+    return ''.join(out)
+
 def load_config():
     if os.path.isfile(CONFIG_FILE):
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            return json.loads(strip_json_comments(f.read()))
     return {}
 
 def get_required(key):
