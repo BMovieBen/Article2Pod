@@ -53,6 +53,13 @@ def start_comfyui():
         '--port', port, '--enable-manager', '--preview-method', 'auto',
     ]
 
+    # Optional extra ComfyUI flags from config.json (e.g. speedups such as
+    # "--use-sage-attention"), so launch tuning doesn't need code edits.
+    extra_args = config.get('comfy_extra_args') or []
+    if extra_args:
+        print(f'[Article2Pod] Extra ComfyUI args: {" ".join(extra_args)}')
+        args += [str(a) for a in extra_args]
+
     # web_custom_versions/desktop_app only exists in the older Electron-
     # bundled install layout, which shipped a custom frontend build there.
     # Standalone/uv-based installs don't have it and serve ComfyUI's own

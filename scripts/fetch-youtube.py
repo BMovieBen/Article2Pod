@@ -50,7 +50,6 @@ def get_video_metadata(url):
             'yt-dlp', 
             '--dump-json', 
             '--no-playlist', 
-            '--extractor-args', 'youtube:player_client=default,android', # FIX: Add player client workaround
             url
         ],
         capture_output=True, text=True
@@ -63,12 +62,11 @@ def get_video_metadata(url):
 def download_audio(url, slug):
     dest   = os.path.join(AUDIO_FOLDER, f'{slug}.mp3')
     
-    # FIX: Removed explicit '--format', 'bestaudio/best'
-    # FIX: Added --extractor-args to bypass 403 Forbidden signature blocks
+    # Don't force --extractor-args player_client: the android client is
+    # SABR-only/PO-token gated and causes HTTP 403; yt-dlp's defaults work.
     result = subprocess.run([
         'yt-dlp', '--no-playlist', '--extract-audio',
         '--audio-format', 'mp3', '--audio-quality', '0',
-        '--extractor-args', 'youtube:player_client=default,android',
         '--postprocessor-args', 'ffmpeg:-q:a 0 -ac 2 -joint_stereo 1',
         '--output', dest, url
     ], capture_output=True, text=True)

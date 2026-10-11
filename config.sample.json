@@ -16,6 +16,7 @@
   ],
   "comfy_extra_custom_nodes_path": "C:\\Users\\yourname\\AppData\\Local\\Comfy-Desktop\\ComfyUI-Installs\\ComfyUI\\ComfyUI\\custom_nodes",
   "comfy_startup_timeout": 120,
+  "comfy_extra_args": [],
   "generation_logging_enabled": false,
   "chunk_word_count": 1400,
   "audio_normalize_enabled": false,
