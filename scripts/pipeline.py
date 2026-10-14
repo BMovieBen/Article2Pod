@@ -6,7 +6,9 @@ import requests
 from utils import (
     load_config, get_comfy_url, get_comfy_listen_host, get_temp_folder,
     get_input_folder, get_audio_folder, build_extra_model_paths_yaml,
-    get_comfyui_console_log_path, free_comfyui_memory
+    get_comfyui_console_log_path, free_comfyui_memory,
+    set_stop_flag, clear_stop_flag, get_registered_comfy_prompts,
+    clear_comfy_prompt_registry
 )
 from queue_manager import queue_lock, load_queue, save_queue, delete_temp_files
 
@@ -18,6 +20,11 @@ current_slug          = None
 current_pipeline_type = None   # pipeline_type of the in-flight item, set by process_queue
 comfy_interrupt_error = None   # set if /interrupt fails, surfaced to the UI
 cancelled_by_user     = False  # set by request_stop() when it interrupts a comfyui job
+
+# A stop flag or prompt registry left behind by a crashed/killed previous
+# run would block or confuse the next one, so start clean.
+clear_stop_flag()
+clear_comfy_prompt_registry()
 
 def is_comfyui_running():
     try:
@@ -199,16 +206,47 @@ def free_comfyui_memory_manual():
           else '[Article2Pod] Failed to free ComfyUI memory.')
     return (True, None) if ok else (False, 'Failed to free ComfyUI memory (see console).')
 
-def interrupt_comfyui():
-    """Cancel the in-flight ComfyUI prompt via the /interrupt endpoint.
-    Returns True on success, False if the request itself fails (network
-    error, ComfyUI unresponsive, etc). Does not fall back to killing the
-    process — that decision is left to the user."""
+def cancel_own_comfy_prompts():
+    """Cancel only the ComfyUI prompts Article2Pod itself submitted (as
+    recorded in the prompt registry by the generator scripts). Anything
+    else in ComfyUI -- jobs queued from Comfy Desktop, etc. -- is never
+    touched.
+
+    - Our pending prompts are removed from the queue (POST /queue delete).
+    - Our running prompt is interrupted, but only after confirming via
+      /queue that it is the one currently executing; the prompt_id is
+      also passed to /interrupt so newer ComfyUI builds apply the same
+      check server-side.
+
+    Returns (ok, n_cancelled). ok is False if ComfyUI couldn't be reached."""
+    own = set(get_registered_comfy_prompts())
+    if not own:
+        return True, 0
+    base = get_comfy_url()
+
+    def read_queue():
+        q = requests.get(f'{base}/queue', timeout=5).json()
+        pending = [e[1] for e in q.get('queue_pending', []) if len(e) > 1 and e[1] in own]
+        running = [e[1] for e in q.get('queue_running', []) if len(e) > 1 and e[1] in own]
+        return pending, running
+
+    cancelled = 0
     try:
-        r = requests.post(f'{get_comfy_url()}/interrupt', timeout=5)
-        return r.status_code == 200
+        pending, _ = read_queue()
+        if pending:
+            r = requests.post(f'{base}/queue', json={'delete': pending}, timeout=5)
+            if r.status_code == 200:
+                cancelled += len(pending)
+        # Re-read: a pending prompt may have just started (so the delete
+        # couldn't remove it), or ours may have been running all along.
+        _, running = read_queue()
+        for pid in running:
+            r = requests.post(f'{base}/interrupt', json={'prompt_id': pid}, timeout=5)
+            if r.status_code == 200:
+                cancelled += 1
+        return True, cancelled
     except Exception:
-        return False
+        return False, cancelled
 
 def run_script(script_name, *args):
     scripts_dir = os.path.dirname(os.path.abspath(__file__))
@@ -276,7 +314,10 @@ def process_single(slug):
         # Optional ComfyUI-generated album art. Best-effort -- failure
         # here never fails the item; the fallback art fetch-metadata
         # already wrote to temp/{slug}.jpg is left in place for tag-mp3.
-        if item and item.get('art_pending_comfyui'):
+        if stop_requested and item and item.get('art_pending_comfyui'):
+            print(f'[Article2Pod] Stop requested -- skipping ComfyUI art for {slug}, '
+                  f'using fallback art.')
+        elif item and item.get('art_pending_comfyui'):
             print(f'[Article2Pod] Attempting ComfyUI art generation for {slug}...')
             ok_art, out_art, _ = run_script('generate-art.py', slug)
             if ok_art:
@@ -409,6 +450,8 @@ def process_queue():
         current_slug          = None
         current_pipeline_type = None
         cancelled_by_user     = False
+        clear_stop_flag()
+        clear_comfy_prompt_registry()
         pending_remain = [i for i in load_queue() if i['status'] == 'pending']
         if pending_remain:
             print(f'[Article2Pod] {len(pending_remain)} article(s) remaining in queue.')
@@ -421,32 +464,42 @@ def start_processing():
     stop_requested        = False
     comfy_interrupt_error = None
     cancelled_by_user     = False
+    clear_stop_flag()
+    clear_comfy_prompt_registry()
     threading.Thread(target=process_queue, daemon=True).start()
 
 def request_stop():
     """Stop the queue. If the in-flight item is a ComfyUI generation,
-    interrupt it immediately and shut ComfyUI down cleanly. Otherwise
-    (youtube/audio), let the current item finish before halting."""
+    cancel the ComfyUI prompts Article2Pod itself submitted -- running
+    ones are interrupted, pending ones are removed from ComfyUI's queue --
+    and never touch prompts that came from anywhere else (e.g. a long job
+    queued from Comfy Desktop). The generator scripts notice the
+    cancellation on their next poll, clean up and exit. A stop flag also
+    stops them submitting anything new. Otherwise (youtube/audio), let the
+    current item finish before halting."""
     global stop_requested, comfy_interrupt_error, cancelled_by_user
     stop_requested = True
+    set_stop_flag()
 
     with queue_lock:
         slug          = current_slug
         pipeline_type = current_pipeline_type
 
     if slug and pipeline_type == 'comfyui':
-        print(f'[Article2Pod] Stop requested — interrupting ComfyUI ({slug})...')
-        if interrupt_comfyui():
-            cancelled_by_user = True
+        print(f'[Article2Pod] Stop requested -- cancelling Article2Pod\'s ComfyUI jobs ({slug})...')
+        cancelled_by_user = True
+        ok, n = cancel_own_comfy_prompts()
+        if ok:
             comfy_interrupt_error = None
-            print('[Article2Pod] ComfyUI interrupt sent.')
+            print(f'[Article2Pod] Cancelled {n} Article2Pod prompt(s) in ComfyUI '
+                  f'(other jobs left untouched).')
         else:
             comfy_interrupt_error = (
                 'Could not reach ComfyUI to cancel the current generation. '
                 'It may still be running — the queue will stop after it, '
                 'or you can close ComfyUI manually.'
             )
-            print('[Article2Pod] ComfyUI interrupt failed.')
+            print('[Article2Pod] ComfyUI cancel failed.')
 
 def get_state():
     return {

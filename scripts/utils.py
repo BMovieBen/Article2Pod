@@ -198,6 +198,93 @@ def free_comfyui_memory(comfy_url=None):
     except Exception:
         return False
 
+# ------------------------------------------------------------
+# ComfyUI prompt ownership + cooperative stop
+#
+# ComfyUI is shared with other things (e.g. Comfy Desktop jobs), so the
+# Stop button must only ever touch prompts Article2Pod itself submitted.
+# The generator scripts run as subprocesses, so they record the prompt_ids
+# they submit in a small registry file the parent (pipeline.py) can read,
+# and the parent drops a stop-flag file the scripts check before
+# submitting anything new.
+# ------------------------------------------------------------
+def _prompt_registry_path():
+    return os.path.join(get_temp_folder(), 'a2p-comfy-prompts.json')
+
+def _stop_flag_path():
+    return os.path.join(get_temp_folder(), 'a2p-stop-requested')
+
+def _read_prompt_registry():
+    try:
+        with open(_prompt_registry_path(), 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return [str(p) for p in data] if isinstance(data, list) else []
+    except Exception:
+        return []
+
+def _write_prompt_registry(ids):
+    try:
+        os.makedirs(get_temp_folder(), exist_ok=True)
+        with open(_prompt_registry_path(), 'w', encoding='utf-8') as f:
+            json.dump(list(ids), f)
+    except Exception:
+        pass
+
+def register_comfy_prompt(prompt_id):
+    """Record a prompt_id this app submitted to ComfyUI."""
+    ids = _read_prompt_registry()
+    if prompt_id not in ids:
+        ids.append(str(prompt_id))
+        _write_prompt_registry(ids)
+
+def unregister_comfy_prompt(prompt_id):
+    ids = [p for p in _read_prompt_registry() if p != str(prompt_id)]
+    _write_prompt_registry(ids)
+
+def get_registered_comfy_prompts():
+    return _read_prompt_registry()
+
+def clear_comfy_prompt_registry():
+    try:
+        os.remove(_prompt_registry_path())
+    except OSError:
+        pass
+
+def set_stop_flag():
+    try:
+        os.makedirs(get_temp_folder(), exist_ok=True)
+        with open(_stop_flag_path(), 'w') as f:
+            f.write('1')
+    except Exception:
+        pass
+
+def clear_stop_flag():
+    try:
+        os.remove(_stop_flag_path())
+    except OSError:
+        pass
+
+def stop_flag_set():
+    return os.path.isfile(_stop_flag_path())
+
+def prompt_vanished(prompt_id, comfy_url=None):
+    """True only if ComfyUI is reachable and the prompt is in neither the
+    running/pending queue nor history -- i.e. it was removed from the
+    queue (cancelled) rather than still waiting or finished. Any error
+    returns False so a flaky request never looks like a cancellation."""
+    import requests
+    url = comfy_url or get_comfy_url()
+    try:
+        q = requests.get(f'{url}/queue', timeout=5).json()
+        for key in ('queue_running', 'queue_pending'):
+            for entry in q.get(key, []):
+                if len(entry) > 1 and entry[1] == prompt_id:
+                    return False
+        h = requests.get(f'{url}/history/{prompt_id}', timeout=5).json()
+        return prompt_id not in h
+    except Exception:
+        return False
+
 def get_generation_log_path():
     log_dir = os.path.join(APP_DIR, 'log')
     os.makedirs(log_dir, exist_ok=True)

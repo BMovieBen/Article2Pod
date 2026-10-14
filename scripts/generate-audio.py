@@ -7,7 +7,9 @@ from utils import (
     get_input_folder, get_audio_folder, get_temp_folder,
     get_audio_output_prefix, get_generation_logging_enabled,
     get_chunk_word_count, APP_DIR,
-    get_audio_normalize_enabled, normalize_audio
+    get_audio_normalize_enabled, normalize_audio,
+    register_comfy_prompt, unregister_comfy_prompt, stop_flag_set,
+    prompt_vanished
 )
 
 COMFY_URL     = get_comfy_url()
@@ -224,10 +226,17 @@ def normalize_audio_step(slug, mp3_path, word_count=0, voice_file=''):
         log_generation(slug, word_count, voice_file, 'normalize_failed', duration, err)
 
 def submit_workflow(workflow):
+    if stop_flag_set():
+        print('  Stop requested -- not submitting to ComfyUI.')
+        return None
     response = requests.post(f'{COMFY_URL}/prompt',
                              json={'prompt': workflow}, timeout=30)
     response.raise_for_status()
-    return response.json().get('prompt_id')
+    prompt_id = response.json().get('prompt_id')
+    if prompt_id:
+        # Record ownership so Stop only ever cancels prompts we submitted.
+        register_comfy_prompt(prompt_id)
+    return prompt_id
 
 def log_comfyui_error(prompt_id, history_entry):
     """Write ComfyUI error details to log/comfyui-errors.log."""
@@ -258,11 +267,19 @@ def log_comfyui_error(prompt_id, history_entry):
     print(f'  Error details logged to: {log_path}')
 
 def wait_for_completion(prompt_id, timeout=3600):
-    """Returns (status, detail) where status is 'success', 'error', or
-    'timeout', and detail is an error message (empty string on success)."""
+    try:
+        return _wait_for_completion(prompt_id, timeout)
+    finally:
+        unregister_comfy_prompt(prompt_id)
+
+def _wait_for_completion(prompt_id, timeout=3600):
+    """Returns (status, detail) where status is 'success', 'error',
+    'cancelled' or 'timeout', and detail is an error message (empty
+    string on success)."""
     print(f'  Generating audio...')
     elapsed  = 0
     interval = 5
+    missing  = 0   # consecutive polls where the prompt was gone from ComfyUI
 
     while elapsed < timeout:
         time.sleep(interval)
@@ -282,6 +299,14 @@ def wait_for_completion(prompt_id, timeout=3600):
                     detail = '; '.join(str(m) for m in msgs) if msgs \
                              else 'ComfyUI reported an error.'
                     return 'error', detail
+            else:
+                # Not in history yet: either still queued/running, or it
+                # was removed from the queue (Stop cancels our pending
+                # prompts). Two consecutive misses = cancelled.
+                missing = missing + 1 if prompt_vanished(prompt_id, COMFY_URL) else 0
+                if missing >= 2:
+                    print('  Prompt no longer in ComfyUI queue -- cancelled.')
+                    return 'cancelled', 'Cancelled (prompt removed from ComfyUI queue).'
         except Exception:
             pass
 

@@ -12,7 +12,9 @@ from utils import (
     get_comfy_url, get_art_workflow_file, get_art_prompt_node_title,
     get_art_save_node_class, get_art_generation_timeout,
     get_art_prompt_placeholder, get_temp_folder, get_output_folder,
-    log_generation, free_comfyui_memory as _free_comfyui_memory
+    log_generation, free_comfyui_memory as _free_comfyui_memory,
+    register_comfy_prompt, unregister_comfy_prompt, stop_flag_set,
+    prompt_vanished
 )
 from art_prompt import build_art_prompt, sanitize_title_for_prompt
 
@@ -129,6 +131,9 @@ def patch_workflow(workflow, title, filename_prefix):
     return workflow
 
 def submit_workflow(workflow):
+    if stop_flag_set():
+        print('  Stop requested -- not submitting art to ComfyUI.')
+        return None
     response = requests.post(f'{COMFY_URL}/prompt',
                              json={'prompt': workflow}, timeout=30)
     if response.status_code != 200:
@@ -138,15 +143,26 @@ def submit_workflow(workflow):
             body = response.text
         raise RuntimeError(
             f'ComfyUI rejected the workflow (HTTP {response.status_code}): {body}')
-    return response.json().get('prompt_id')
+    prompt_id = response.json().get('prompt_id')
+    if prompt_id:
+        # Record ownership so Stop only ever cancels prompts we submitted.
+        register_comfy_prompt(prompt_id)
+    return prompt_id
 
 def wait_for_image(prompt_id, timeout=300):
+    try:
+        return _wait_for_image(prompt_id, timeout)
+    finally:
+        unregister_comfy_prompt(prompt_id)
+
+def _wait_for_image(prompt_id, timeout=300):
     """Poll /history/{prompt_id}. Returns (status, detail, output_path).
     Reads the actual output filename from history's 'outputs' block
     rather than glob+mtime -- an exact match instead of a best guess at
     which file just landed."""
     print('  Generating image...')
     elapsed, interval = 0, 3
+    missing = 0   # consecutive polls where the prompt was gone from ComfyUI
     while elapsed < timeout:
         time.sleep(interval)
         elapsed += interval
@@ -154,7 +170,15 @@ def wait_for_image(prompt_id, timeout=300):
             r       = requests.get(f'{COMFY_URL}/history/{prompt_id}', timeout=10)
             history = r.json()
             if prompt_id not in history:
+                # Still queued/running, or removed from the queue by Stop.
+                # Two consecutive misses = cancelled, so we don't sit here
+                # for the full timeout waiting on a prompt that won't run.
+                missing = missing + 1 if prompt_vanished(prompt_id, COMFY_URL) else 0
+                if missing >= 2:
+                    print('  Prompt no longer in ComfyUI queue -- cancelled.')
+                    return 'cancelled', 'Cancelled (prompt removed from ComfyUI queue).', None
                 continue
+            missing = 0
             entry  = history[prompt_id]
             status = entry.get('status', {})
             if status.get('status_str') == 'error':
