@@ -498,15 +498,29 @@ def is_youtube_url(url):
     return any(domain == d or domain.endswith('.' + d)
                for d in ['youtube.com', 'youtu.be'])
 
+CHROME_UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+             '(KHTML, like Gecko) Chrome/124.0 Safari/537.36')
+
+def http_get(url, timeout=15, **kwargs):
+    """requests.get with the configured user agent; if the site rejects it
+    (401/403/406 -- e.g. KTAR 403s the bare 'Mozilla/5.0'), retry once with a
+    full Chrome user agent."""
+    import requests
+    headers = dict(kwargs.pop('headers', {}) or {})
+    headers.setdefault('User-Agent', get_user_agent())
+    r = requests.get(url, headers=headers, timeout=timeout, **kwargs)
+    if r.status_code in (401, 403, 406):
+        headers['User-Agent'] = CHROME_UA
+        r = requests.get(url, headers=headers, timeout=timeout, **kwargs)
+    return r
+
 def fetch_and_resize_image(img_url, size=(500, 500)):
     """Download and resize/crop image to square. Returns PIL Image or None."""
     import requests
     from PIL import Image
     from io import BytesIO
     try:
-        r = requests.get(img_url,
-                         headers={'User-Agent': get_user_agent()},
-                         timeout=10)
+        r = http_get(img_url, timeout=10)
         img = Image.open(BytesIO(r.content)).convert('RGB')
         target_w, target_h = size
         orig_w, orig_h     = img.size

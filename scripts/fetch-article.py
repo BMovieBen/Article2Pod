@@ -9,8 +9,10 @@ from utils import (
     safe_slug, clean_author, get_title, get_author,
     load_config, get_input_folder, get_temp_folder,
     get_user_agent, get_ad_strip_markers, apply_phonetic_replacements,
-    is_clipboard_domain, is_youtube_url, parse_reader_mode
+    is_clipboard_domain, is_youtube_url, parse_reader_mode,
+    http_get, fetch_and_resize_image
 )
+from jwplayer import detect_video_page
 
 INPUT_FOLDER = get_input_folder()
 TEMP_FOLDER  = get_temp_folder()
@@ -126,6 +128,40 @@ def is_blocked(title, text):
     return any(phrase in combined_lower for phrase in BLOCK_INDICATORS) \
            and len(text) < 500
 
+def queue_jwplayer_video(url, soup, media):
+    """Page whose main content is a JW Player video: queue it like a YouTube
+    item (handoff + sidecar). fetch-jwplayer.py does the download later."""
+    from urllib.parse import urlparse
+    title = media['title']
+    slug  = safe_slug(title) or f'video-{media["id"]}'
+    tag   = soup.find('meta', attrs={'property': 'og:site_name'})
+    site  = (tag.get('content').strip() if tag and tag.get('content')
+             else urlparse(url).netloc.replace('www.', ''))
+
+    art_path = None
+    if media.get('image'):
+        img = fetch_and_resize_image(media['image'])
+        if img:
+            art_path = os.path.join(TEMP_FOLDER, f'{slug}.jpg')
+            img.save(art_path, 'JPEG', quality=90)
+
+    with open(os.path.join(TEMP_FOLDER, f'youtube-handoff-{slug}.json'),
+              'w', encoding='utf-8') as f:
+        json.dump({'jwplayer_id': media['id'], 'source_url': url,
+                   'slug': slug}, f)
+    with open(os.path.join(TEMP_FOLDER, f'{slug}.json'),
+              'w', encoding='utf-8') as f:
+        json.dump({'title': title, 'artist': site, 'album': site,
+                   'album_art': art_path, 'slug': slug, 'source_url': url},
+                  f, indent=2, ensure_ascii=False)
+    mins = int((media.get('duration') or 0) // 60)
+    print(f'  Video page detected (JW Player {media["id"]}, ~{mins} min), '
+          f'will download audio directly.')
+    print(f'  Title:      {title}')
+    print(f'  Site:       {site}')
+    print(f'  Slug:       {slug}')
+    return slug
+
 def fetch_article(url):
     os.makedirs(TEMP_FOLDER, exist_ok=True)
     os.makedirs(INPUT_FOLDER, exist_ok=True)
@@ -201,9 +237,8 @@ def fetch_article(url):
         sys.exit(2)
 
     else:
-        headers = {'User-Agent': get_user_agent()}
         try:
-            r = requests.get(url, headers=headers, timeout=15)
+            r = http_get(url, timeout=15)
         except (requests.exceptions.ConnectionError,
                 requests.exceptions.ChunkedEncodingError):
             print('  Connection failed, site may be blocking bots.')
@@ -214,6 +249,13 @@ def fetch_article(url):
         if not r.text or len(r.text.strip()) < 200:
             print('  Page appears empty or JS-rendered.')
             sys.exit(2)
+
+        # A video page (e.g. KTAR /watch/) has no article text -- its audio
+        # is the content. Articles that merely embed a video stay on the
+        # text path.
+        video = detect_video_page(r.text, full_soup)
+        if video:
+            return queue_jwplayer_video(url, full_soup, video)
 
         try:
             doc  = Document(r.text)

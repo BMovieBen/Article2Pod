@@ -235,9 +235,14 @@ def process_single(slug):
     if os.path.isfile(youtube_handoff):
         with open(youtube_handoff) as f:
             hdata = json.load(f)
-        ok, out, _ = run_script('fetch-youtube.py', hdata['source_url'], slug)
-        if not ok:
-            return False, f'fetch-youtube failed:\n{out}'
+        if hdata.get('jwplayer_id'):
+            ok, out, _ = run_script('fetch-jwplayer.py', hdata['jwplayer_id'], slug)
+            if not ok:
+                return False, f'fetch-jwplayer failed:\n{out}'
+        else:
+            ok, out, _ = run_script('fetch-youtube.py', hdata['source_url'], slug)
+            if not ok:
+                return False, f'fetch-youtube failed:\n{out}'
         os.remove(youtube_handoff)
 
     elif os.path.isfile(audio_handoff):

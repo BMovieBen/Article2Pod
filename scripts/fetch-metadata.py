@@ -193,6 +193,10 @@ def fetch_metadata(url):
             hdata = json.load(f)
         if hdata.get('source_url') == url:
             slug = hdata.get('slug')
+            if hdata.get('jwplayer_id'):
+                # fetch-article.py already wrote the full sidecar + art
+                print(f'  JW Player video — metadata already set.')
+                return slug
             print(f'  YouTube URL — fetching metadata via yt-dlp...')
 
             try:
