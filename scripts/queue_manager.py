@@ -31,7 +31,7 @@ def get_queue_item(slug):
 
 def delete_temp_files(slug):
     temp = get_temp_folder()
-    for pattern in [f'{slug}.txt', f'{slug}.json', f'{slug}.jpg',
+    for pattern in [f'{slug}.txt', f'{slug}.pre-ai.txt', f'{slug}.json', f'{slug}.jpg',
                     f'{slug}.mp3', f'audio-handoff-{slug}.json',
                     f'youtube-handoff-{slug}.json', f'slug-handoff-{slug}.json']:
         path = os.path.join(temp, pattern)

@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 from utils import (
     safe_slug, clean_author, get_title, get_author,
     load_config, get_input_folder, get_temp_folder,
-    get_user_agent, get_ad_strip_markers, apply_phonetic_replacements,
+    get_user_agent, get_ad_strip_markers, apply_strip_lines, apply_phonetic_replacements,
     is_clipboard_domain, is_youtube_url, parse_reader_mode,
     http_get, fetch_and_resize_image
 )
@@ -210,6 +210,7 @@ def fetch_article(url):
         if not text:
             print('  Steam API returned empty article body. Please use Text mode and paste from Reader Mode.')
             sys.exit(2)
+        text = apply_strip_lines(text, author)
         text = apply_phonetic_replacements(text)
         slug = safe_slug(title)
         # Write handoff so fetch-metadata uses our already-resolved title/author/slug
@@ -312,6 +313,7 @@ def fetch_article(url):
             print(f'  Readability error: {e}')
             sys.exit(2)
 
+    text = apply_strip_lines(text, author)
     text = apply_phonetic_replacements(text)
     header   = f'{title}\r\nWritten by {author}\r\n\r\n\r\n'
     txt_path = os.path.join(TEMP_FOLDER, f'{slug}.txt')

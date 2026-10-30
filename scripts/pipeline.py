@@ -8,7 +8,7 @@ from utils import (
     get_input_folder, get_audio_folder, build_extra_model_paths_yaml,
     get_comfyui_console_log_path, free_comfyui_memory,
     set_stop_flag, clear_stop_flag, get_registered_comfy_prompts,
-    clear_comfy_prompt_registry
+    clear_comfy_prompt_registry, get_ai_cleanup_config
 )
 from queue_manager import queue_lock, load_queue, save_queue, delete_temp_files
 
@@ -264,6 +264,26 @@ def run_script(script_name, *args):
     )
     return result.returncode == 0, filtered, result.returncode
 
+def sync_queue_metadata_from_sidecar(slug):
+    """After ai_cleanup fixed metadata in temp/{slug}.json, mirror it onto
+    the queue item so the UI shows what will be tagged."""
+    json_path = os.path.join(get_temp_folder(), f'{slug}.json')
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            meta = json.load(f)
+    except Exception:
+        return
+    if not meta.get('metadata_ai_fixed'):
+        return
+    with queue_lock:
+        q    = load_queue()
+        item = next((i for i in q if i['slug'] == slug), None)
+        if item:
+            item['title']  = meta.get('title', item.get('title'))
+            item['artist'] = meta.get('artist', item.get('artist'))
+            item['album']  = meta.get('album', item.get('album'))
+            save_queue(q)
+
 def process_single(slug):
     temp      = get_temp_folder()
     input_dir = get_input_folder()
@@ -296,6 +316,16 @@ def process_single(slug):
         article_txt = os.path.join(input_dir, 'article.txt')
         if not os.path.isfile(slug_txt):
             return False, f'Article text file not found for slug: {slug}'
+
+        # Optional LLM cleanup (ai_cleanup in config.json). Runs now, after
+        # the user clicked generate, so adding articles stays instant.
+        # Best-effort: it never fails the item.
+        if get_ai_cleanup_config()['mode'] != 'off' and not stop_requested:
+            ok_ai, out_ai, _ = run_script('ai_cleanup.py', slug)
+            for line in out_ai.splitlines():
+                print(line)
+            sync_queue_metadata_from_sidecar(slug)
+
         shutil.copy2(slug_txt, article_txt)
 
         # Get voice override for this slug from queue

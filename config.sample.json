@@ -58,12 +58,44 @@
   "workflow_file": "workflow\\workflow-api.json",
   // REQUIRED. Filename prefix of your workflow's SaveAudioMP3 node.
   "audio_output_prefix": "audio/podcast",
-  // Long articles are split into chunks of about this many words. Default: 1400
+  // Long articles are split into chunks of about this many words, ending at a paragraph break where possible. Default: 1400
   "chunk_word_count": 1400,
   // Normalize loudness with ffmpeg after generation. Default: false
   "audio_normalize_enabled": false,
   // Save a log of each generation run. Default: true
   "generation_logging_enabled": false,
+
+  // ───────────────────────── AI cleanup & quality check (optional, slower) ─────────────────────────
+  // Both features are off by default. They add time to every article, so turn them off
+  // ("mode": "off") whenever speed matters more.
+  //
+  // AI cleanup runs after you click generate. A text model in ComfyUI looks for leftover page
+  // junk (captions, promos, repeated bylines) and checks the title / author / site. It only picks
+  // lines to delete; it never rewrites the article. Metadata you edited yourself is never changed.
+  //   mode          off | log_only (decide and log, change nothing) | apply
+  //   workflow_file  API-format workflow that runs the text model. To change the model, edit it there
+  //                  (CLIPLoader node). Keep the {{prompt}} and {{system_prompt}} placeholders and a PreviewAny node
+  //   max_remove_fraction  a result that would delete more of the article than this is refused
+  //   fix_metadata  also correct title / author / site
+  "ai_cleanup": {
+    "mode": "off",
+    "workflow_file": "workflow/cleanup-workflow-api.json",
+    "max_remove_fraction": 0.30,
+    "fix_metadata": true
+  },
+  // Quality check: each generated chunk is transcribed with Whisper and compared with its text.
+  //   mode          off | log_only (score and log only) | retry (regenerate chunks scoring below min_match)
+  //   asr_model_dir folder of a Whisper checkpoint (for example openai/whisper-large-v3-turbo)
+  //   min_match     1 minus word error rate needed to accept a chunk. max_attempts per chunk, best kept
+  "ai_quality_check": {
+    "mode": "off",
+    "asr_model_dir": "C:\\path\\to\\whisper-large-v3-turbo",
+    "device": "cuda",
+    "min_match": 0.9,
+    "max_attempts": 5
+  },
+  // Write stats about both features to log/ai-*.csv so you can judge their effect on speed and quality.
+  "ai_stats_logging": true,
 
   // ───────────────────────── Album art ─────────────────────────
   // Sources tried in order until one works:
@@ -97,6 +129,12 @@
   // Anything after one of these phrases is cut from the article (newsletter pitches, ads, etc.)
   "ad_strip_markers": [
     "Example: Sign up for our newsletter"
+  ],
+  // Whole lines to delete (share buttons, photo credits, etc). Each entry is an exact
+  // line (case-insensitive) or "re:<regex>". Regex entries only apply to lines up to 120 characters.
+  "strip_lines": [
+    "Link copied to clipboard",
+    "re:^(image|photo|credit)s?\\s*:"
   ],
   // Find and replace in the text before speech, to fix mispronunciations.
   "phonetic_replacements": {

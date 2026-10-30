@@ -9,8 +9,9 @@ from utils import (
     get_chunk_word_count, APP_DIR,
     get_audio_normalize_enabled, normalize_audio,
     register_comfy_prompt, unregister_comfy_prompt, stop_flag_set,
-    prompt_vanished
+    prompt_vanished, get_ai_quality_config, log_ai_stats, log_ai_detail
 )
+from ai_quality import ASRWorker
 
 COMFY_URL     = get_comfy_url()
 WORKFLOW_FILE = get_workflow_file()
@@ -77,7 +78,7 @@ def get_article_txt_from_workflow():
 ARTICLE_TXT = get_article_txt_from_workflow()
 
 def patch_workflow(workflow, voice_file, voice_full_path,
-                   text_file=None, filename_prefix=None):
+                   text_file=None, filename_prefix=None, seed=None):
     text_file       = text_file or ARTICLE_TXT
     filename_prefix = filename_prefix or OUTPUT_PREFIX
     for node_id, node in workflow.items():
@@ -92,6 +93,9 @@ def patch_workflow(workflow, voice_file, voice_full_path,
         elif ct == 'SaveAudioMP3':
             node['inputs']['filename_prefix'] = filename_prefix
             print(f'  Output:   {filename_prefix}_*.mp3')
+        elif ct == 'VibeVoiceSingleSpeakerNode' and seed is not None:
+            node['inputs']['seed'] = seed
+            print(f'  Seed:     {seed}')
     return workflow
 
 def count_words(path):
@@ -160,9 +164,22 @@ def split_text_into_chunks(text, target_words):
     for atom_text, is_new_para in atoms:
         atom_words = len(atom_text.split())
         if current_atoms and current_words + atom_words > target_words:
+            # Prefer ending the chunk at a paragraph break: if the chunk is
+            # about to split mid-paragraph, carry the unfinished paragraph
+            # over to the next chunk, provided at least 60% of the target
+            # is left behind.
+            carry = []
+            if not is_new_para:
+                for k in range(len(current_atoms) - 1, 0, -1):
+                    if current_atoms[k][1]:
+                        kept = sum(len(a[0].split()) for a in current_atoms[:k])
+                        if kept >= 0.6 * target_words:
+                            carry = current_atoms[k:]
+                            current_atoms = current_atoms[:k]
+                        break
             chunks.append(current_atoms)
-            current_atoms = []
-            current_words = 0
+            current_atoms = carry
+            current_words = sum(len(a[0].split()) for a in carry)
         current_atoms.append((atom_text, is_new_para))
         current_words += atom_words
 
@@ -280,6 +297,7 @@ def _wait_for_completion(prompt_id, timeout=3600):
     elapsed  = 0
     interval = 5
     missing  = 0   # consecutive polls where the prompt was gone from ComfyUI
+    unreachable = 0   # consecutive polls where ComfyUI did not answer
 
     while elapsed < timeout:
         time.sleep(interval)
@@ -287,6 +305,7 @@ def _wait_for_completion(prompt_id, timeout=3600):
         try:
             r       = requests.get(f'{COMFY_URL}/history/{prompt_id}', timeout=10)
             history = r.json()
+            unreachable = 0
             if prompt_id in history:
                 status = history[prompt_id].get('status', {})
                 if status.get('completed'):
@@ -308,9 +327,18 @@ def _wait_for_completion(prompt_id, timeout=3600):
                     print('  Prompt no longer in ComfyUI queue -- cancelled.')
                     return 'cancelled', 'Cancelled (prompt removed from ComfyUI queue).'
         except Exception:
-            pass
+            unreachable += 1
+            if unreachable >= 24:     # about two minutes without an answer
+                print('  ComfyUI stopped responding.')
+                return 'error', 'ComfyUI stopped responding.'
 
     print(f'  Timed out after {timeout}s')
+    # Don't leave the job running in ComfyUI: it would block the next article.
+    try:
+        requests.post(f'{COMFY_URL}/queue', json={'delete': [prompt_id]}, timeout=10)
+        requests.post(f'{COMFY_URL}/interrupt', timeout=10)
+    except Exception:
+        pass
     return 'timeout', f'Timed out after {timeout}s'
 
 def rename_output(slug):
@@ -344,7 +372,7 @@ def find_chunk_output(slug, chunk_index):
     files = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
     return files[0] if files else None
 
-def generate_chunk(slug, chunk_index, chunk_text, voice_file, voice_full_path):
+def generate_chunk(slug, chunk_index, chunk_text, voice_file, voice_full_path, seed=None):
     """Submit one chunk to ComfyUI and wait for it. Returns
     (status, detail, word_count, duration, output_path)."""
     chunk_filename = f'article-{slug}-c{chunk_index:02d}.txt'
@@ -357,6 +385,7 @@ def generate_chunk(slug, chunk_index, chunk_text, voice_file, voice_full_path):
         workflow, voice_file, voice_full_path,
         text_file=chunk_filename,
         filename_prefix=f'{OUTPUT_PREFIX}_{slug}_c{chunk_index:02d}',
+        seed=seed,
     )
 
     start_time = time.time()
@@ -382,6 +411,120 @@ def generate_chunk(slug, chunk_index, chunk_text, voice_file, voice_full_path):
                 word_count, duration, None)
 
     return 'success', '', word_count, duration, output_path
+
+def generate_chunk_checked(slug, chunk_index, chunk_text, voice_file,
+                          voice_full_path, qc, worker):
+    """generate_chunk plus the optional Whisper quality check. With no
+    worker this is a plain generate_chunk call. Otherwise the chunk is
+    scored against its text; in retry mode a low score triggers
+    regeneration with a new seed (up to max_attempts) and the best
+    attempt is kept. Returns the same tuple as generate_chunk plus a stats
+    dict: (status, detail, word_count, duration, output_path, stats)."""
+    if worker is None:
+        r = generate_chunk(slug, chunk_index, chunk_text, voice_file, voice_full_path)
+        return (*r, None)
+
+    retry        = qc['mode'] == 'retry'
+    max_attempts = max(1, int(qc['max_attempts'])) if retry else 1
+    min_match    = float(qc['min_match'])
+    reference    = chunk_text.replace('[pause:3000]', ' ')
+    attempts     = []          # dicts: seed, gen_seconds, asr_seconds, match, path
+    total_gen    = 0.0
+    last         = None
+
+    for n in range(1, max_attempts + 1):
+        seed = None if n == 1 else random.randint(1, 2**31 - 1)
+        status, detail, words, gen_s, path = generate_chunk(
+            slug, chunk_index, chunk_text, voice_file, voice_full_path, seed=seed)
+        total_gen += gen_s
+        last = (status, detail, words)
+        if status != 'success':
+            for a in attempts:
+                if a['path'] != path:
+                    cleanup_temp_file(a['path'])
+            return status, detail, words, total_gen, None, None
+
+        asr_start = time.time()
+        res       = worker.score(path, reference)
+        asr_s     = time.time() - asr_start
+        match     = res.get('match')
+        if match is None:
+            print(f'  Quality check unavailable for chunk {chunk_index}: '
+                  f'{res.get("error", "unknown error")} -- accepting audio.')
+        else:
+            print(f'  Chunk {chunk_index} attempt {n}: match {match:.3f} '
+                  f'(need {min_match:.2f}, ASR {asr_s:.0f}s)')
+        attempts.append({'attempt': n, 'seed': seed, 'gen_seconds': gen_s,
+                         'asr_seconds': asr_s, 'match': match, 'path': path,
+                         'error': res.get('error', ''), 'diffs': res.get('diffs', [])})
+        if match is None or match >= min_match:
+            break
+
+    scored = [a for a in attempts if a['match'] is not None]
+    best   = max(scored, key=lambda a: a['match']) if scored else attempts[-1]
+    for a in attempts:
+        if a is not best:
+            cleanup_temp_file(a['path'])
+    stats = {
+        'attempts':    attempts,
+        'best':        best,
+        'accepted_ok': best['match'] is None or best['match'] >= min_match,
+        'total_gen':   total_gen,
+        'total_asr':   sum(a['asr_seconds'] for a in attempts),
+    }
+    return last[0], last[1], last[2], total_gen, best['path'], stats
+
+def log_chunk_stats(slug, chunk_index, words, qc, stats):
+    """One CSV row per generation attempt of a chunk (ai-quality-chunks.csv)."""
+    kept = stats['best']
+    for a in stats['attempts']:
+        log_ai_detail('ai-quality-details.jsonl', {
+            'slug': slug, 'chunk': chunk_index, 'attempt': a['attempt'],
+            'match': a['match'], 'diffs': a.get('diffs', [])})
+        log_ai_stats('ai-quality-chunks.csv', {
+            'timestamp':   datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'slug':        slug,
+            'chunk':       chunk_index,
+            'words':       words,
+            'mode':        qc['mode'],
+            'attempt':     a['attempt'],
+            'seed':        '' if a['seed'] is None else a['seed'],
+            'gen_seconds': f'{a["gen_seconds"]:.1f}',
+            'asr_seconds': f'{a["asr_seconds"]:.1f}',
+            'match':       '' if a['match'] is None else f'{a["match"]:.4f}',
+            'min_match':   qc['min_match'],
+            'kept':        a is kept,
+            'error':       a['error'],
+        })
+
+def log_article_quality(slug, words, qc, qc_stats, load_seconds, gen_wall_seconds):
+    """One CSV row per article (ai-quality-articles.csv): the data for
+    judging what the check costs in time and what it buys in match score."""
+    first = [c['attempts'][0]['match'] for c in qc_stats
+             if c['attempts'][0]['match'] is not None]
+    final = [c['best']['match'] for c in qc_stats if c['best']['match'] is not None]
+    attempts_total = sum(len(c['attempts']) for c in qc_stats)
+    kept_gen = sum(c['best']['gen_seconds'] for c in qc_stats)
+    total_gen = sum(c['total_gen'] for c in qc_stats)
+    log_ai_stats('ai-quality-articles.csv', {
+        'timestamp':            datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'slug':                 slug,
+        'words':                words,
+        'mode':                 qc['mode'],
+        'min_match':            qc['min_match'],
+        'chunks':               len(qc_stats),
+        'attempts_total':       attempts_total,
+        'chunks_retried':       sum(1 for c in qc_stats if len(c['attempts']) > 1),
+        'chunks_below_min':     sum(1 for c in qc_stats if not c['accepted_ok']),
+        'match_first_mean':     f'{sum(first) / len(first):.4f}' if first else '',
+        'match_final_mean':     f'{sum(final) / len(final):.4f}' if final else '',
+        'match_final_min':      f'{min(final):.4f}' if final else '',
+        'gen_seconds_total':    f'{total_gen:.0f}',
+        'gen_seconds_wasted':   f'{total_gen - kept_gen:.0f}',
+        'asr_seconds_total':    f'{sum(c["total_asr"] for c in qc_stats):.0f}',
+        'asr_load_seconds':     f'{load_seconds:.0f}',
+        'wall_seconds':         f'{gen_wall_seconds:.0f}',
+    })
 
 def merge_chunks(chunk_paths, slug):
     """Concatenate chunk MP3s into {slug}.mp3 via ffmpeg's concat demuxer
@@ -433,8 +576,33 @@ def main(slug, voice_override=None):
 
     chunk_target = get_chunk_word_count()
 
+    # Optional Whisper quality check (ai_quality_check in config.json).
+    # When active even short articles take the chunk path (as one chunk) so
+    # the same score/retry logic covers them.
+    qc     = get_ai_quality_config()
+    worker = None
+    if qc['mode'] != 'off':
+        worker = ASRWorker(qc)
+        print(f'  Quality check ({qc["mode"]}): loading speech model...')
+        qc_load_start = time.time()
+        if worker.start():
+            print(f'  Quality check ready ({time.time() - qc_load_start:.0f}s).')
+        else:
+            print(f'  Quality check disabled for this run: {worker.error}')
+            worker = None
+    qc_load_seconds = (time.time() - qc_load_start) if qc['mode'] != 'off' else 0.0
+
+    try:
+        _generate(slug, voice_file, voice_full_path, full_text, word_count,
+                  chunk_target, qc, worker, qc_load_seconds)
+    finally:
+        if worker:
+            worker.close()
+
+def _generate(slug, voice_file, voice_full_path, full_text, word_count,
+              chunk_target, qc, worker, qc_load_seconds):
     # --- Short article: single-shot path (unchanged behavior) ---
-    if word_count <= chunk_target:
+    if word_count <= chunk_target and worker is None:
         workflow  = load_workflow()
         workflow  = patch_workflow(workflow, voice_file, voice_full_path)
 
@@ -463,12 +631,16 @@ def main(slug, voice_override=None):
 
     chunk_outputs  = []
     overall_start  = time.time()
+    qc_stats       = []    # one stats dict per chunk when the check ran
     for i, chunk_text in enumerate(chunks, start=1):
-        status, detail, c_words, c_duration, output_path = generate_chunk(
-            slug, i, chunk_text, voice_file, voice_full_path)
+        status, detail, c_words, c_duration, output_path, c_stats =             generate_chunk_checked(slug, i, chunk_text, voice_file,
+                                   voice_full_path, qc, worker)
 
         log_generation(f'{slug}-c{i:02d}', c_words, voice_file, status,
                        c_duration, detail)
+        if c_stats:
+            qc_stats.append(c_stats)
+            log_chunk_stats(slug, i, c_words, qc, c_stats)
 
         if status != 'success':
             for p in chunk_outputs:
@@ -494,6 +666,10 @@ def main(slug, voice_override=None):
 
     merged_path = os.path.join(AUDIO_FOLDER, f'{slug}.mp3')
     normalize_audio_step(slug, merged_path, word_count, voice_file)
+
+    if qc_stats:
+        log_article_quality(slug, word_count, qc, qc_stats, qc_load_seconds,
+                            time.time() - overall_start)
 
 if __name__ == '__main__':
     import argparse

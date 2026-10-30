@@ -3,6 +3,7 @@ config.json
 
 # User workflow
 workflow/workflow-api.json
+workflow/cleanup-workflow-api.json
 
 # Working files
 temp/

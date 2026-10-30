@@ -80,6 +80,74 @@ def get_chunk_word_count():
 def get_audio_normalize_enabled():
     return bool(load_config().get('audio_normalize_enabled', False))
 
+# ------------------------------------------------------------
+# AI cleanup + audio quality check (both optional, see config.sample.json)
+# ------------------------------------------------------------
+AI_CLEANUP_DEFAULTS = {
+    'mode':                 'off',   # off | log_only | apply
+    'workflow_file':        'workflow/cleanup-workflow-api.json',
+    'max_preview_words':    22,
+    'max_remove_fraction':  0.30,    # refuse a result that drops more of the article than this
+    'fix_metadata':         True,
+    'timeout_seconds':      600,
+}
+AI_QUALITY_DEFAULTS = {
+    'mode':          'off',          # off | log_only | retry
+    'asr_model_dir': '',             # folder holding a Whisper checkpoint
+    'device':        'cuda',         # cuda | cpu
+    'min_match':     0.90,           # 1 - word error rate needed to accept a chunk
+    'max_attempts':  5,
+}
+
+def _ai_section(name, defaults):
+    cfg = dict(defaults)
+    cfg.update(load_config().get(name) or {})
+    return cfg
+
+def get_ai_cleanup_config():
+    return _ai_section('ai_cleanup', AI_CLEANUP_DEFAULTS)
+
+def get_ai_quality_config():
+    return _ai_section('ai_quality_check', AI_QUALITY_DEFAULTS)
+
+def get_ai_stats_enabled():
+    return bool(load_config().get('ai_stats_logging', True))
+
+def log_ai_stats(filename, row):
+    """Append one dict as a CSV row to log/<filename>. The header is
+    written when the file is new; if the columns change later the old file
+    is rotated aside rather than mixing layouts. No-op when
+    ai_stats_logging is false."""
+    if not get_ai_stats_enabled():
+        return
+    log_dir = os.path.join(APP_DIR, 'log')
+    os.makedirs(log_dir, exist_ok=True)
+    path   = os.path.join(log_dir, filename)
+    fields = list(row.keys())
+    if os.path.isfile(path):
+        with open(path, 'r', newline='', encoding='utf-8') as f:
+            existing = next(csv.reader(f), None)
+        if existing != fields:
+            stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+            os.replace(path, f'{path}.{stamp}.old')
+    is_new = not os.path.isfile(path)
+    with open(path, 'a', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        if is_new:
+            writer.writeheader()
+        writer.writerow(row)
+
+def log_ai_detail(filename, record):
+    """Append one JSON object per line to log/<filename> (free-form detail:
+    removed lines, metadata before/after, per-attempt scores)."""
+    if not get_ai_stats_enabled():
+        return
+    log_dir = os.path.join(APP_DIR, 'log')
+    os.makedirs(log_dir, exist_ok=True)
+    record = {'timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), **record}
+    with open(os.path.join(log_dir, filename), 'a', encoding='utf-8') as f:
+        f.write(json.dumps(record, ensure_ascii=False) + '\n')
+
 def get_art_sources():
     """Stack-ranked list of art sources to try, in order. Recognized
     values: 'website' (og:image), 'image_search' (DDGS), 'comfyui_generate'
@@ -414,7 +482,8 @@ def sanitize_filename(name):
 def clean_author(text):
     if text.startswith('http') or '/' in text:
         return ''
-    text = re.sub(r'^[Bb][Yy]\s*', '', text).strip()
+    text = re.sub(r'^see\s+all\s+by\s*', '', text, flags=re.IGNORECASE).strip()
+    text = re.sub(r'^by\b\s*', '', text, flags=re.IGNORECASE).strip()
     text = re.sub(r'\s+(reported\s+from|reporting\s+from|in\s+[A-Z][a-z]+).+$', '', text).strip()
     return re.sub(r'  +', ' ', text)
 
@@ -428,6 +497,9 @@ def clean_author(text):
 # at generation time, so the UI and metadata JSON can tell "we don't know
 # the author" apart from "the author is literally named Unknown Author".
 MAX_AUTHOR_LINE_LEN = 100
+# Real headlines run well past a byline's length but rarely past this;
+# anything longer in the first two lines is body prose.
+MAX_TITLE_LINE_LEN = 200
 
 def _safe_author(line, fallback=''):
     if not line or len(line) > MAX_AUTHOR_LINE_LEN:
@@ -569,6 +641,86 @@ def get_domain_override(url='', site_hint=''):
                 resolved['art_path'] = os.path.join(APP_DIR, art_path)
             return resolved
     return None
+
+def strip_byline_echo(text, author, scan_lines=25):
+    """Sites often repeat the author's name as stray lines near the top (a
+    linked byline), sometimes followed by a bio fragment such as "is the
+    Verge's weekend editor...". Drop those lines; only the top of the text is
+    scanned so a name in the body is never touched."""
+    norm = lambda s: s.replace('’', "'").strip().lower()
+    names = {norm(n) for n in re.split(r',|\band\b|&', author or '') if n.strip()}
+    names.discard('')
+    if not names:
+        return text
+    bio = re.compile(r'^(is|was|has|covers|writes|reports|joined)\b')
+    lines = text.splitlines(keepends=True)
+    kept, i = [], 0
+    while i < len(lines):
+        if i < scan_lines and norm(lines[i]) in names:
+            i += 1
+            while i < len(lines) and i < scan_lines and norm(lines[i]) in names:
+                i += 1
+            j = i
+            while j < len(lines) and j < scan_lines and not lines[j].strip():
+                j += 1
+            if j < len(lines) and bio.match(lines[j].strip()):
+                i = j + 1
+            continue
+        kept.append(lines[i])
+        i += 1
+    return ''.join(kept)
+
+_PQ_QUOTES = re.compile("[‘’“”\"']")
+
+def _pq_norm(line):
+    line = _PQ_QUOTES.sub('', line.lower()).replace('—', ' ').replace('-', ' ')
+    return ' '.join(re.sub(r'[^a-z0-9 ]', '', line).split())
+
+def drop_pull_quotes(text, min_words=5, max_words=60):
+    """Remove pull quotes: a short standalone line whose wording also
+    appears inside a longer line elsewhere (magazine sites repeat a
+    sentence from the body as a styled callout, which would be read aloud
+    twice). The copy inside the longer line is kept."""
+    lines = text.splitlines(keepends=True)
+    norms = [_pq_norm(l) for l in lines]
+    drop  = set()
+    for i, ni in enumerate(norms):
+        n_words = len(ni.split())
+        if n_words < min_words or n_words > max_words:
+            continue
+        if any(j != i and len(nj) > len(ni) + 10 and ni in nj
+               for j, nj in enumerate(norms)):
+            drop.add(i)
+    return ''.join(l for i, l in enumerate(lines) if i not in drop)
+
+def apply_strip_lines(text, author=None, max_len=120):
+    """Drop whole lines that are page chrome (share buttons, photo credits, etc).
+    Each strip_lines entry is either an exact line (case-insensitive) or
+    're:<pattern>' (case-insensitive regex, searched within the line).
+    Exact entries and regexes anchored with ^ match at any length; other regex
+    entries only apply to lines up to max_len, so real paragraphs that merely mention a keyword are safe.
+    If author is given, echoes of the byline near the top are dropped too."""
+    text = strip_byline_echo(text, author)
+    if load_config().get('strip_pull_quotes', True):
+        text = drop_pull_quotes(text)
+    entries = load_config().get('strip_lines', [])
+    exact, patterns = set(), []
+    for e in entries:
+        if e.startswith('re:'):
+            patterns.append(re.compile(e[3:], re.IGNORECASE))
+        else:
+            exact.add(e.strip().lower())
+    if not exact and not patterns:
+        return text
+    kept = []
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped and (stripped.lower() in exact or any(
+                p.search(stripped) for p in patterns
+                if len(stripped) <= max_len or p.pattern.startswith('^'))):
+            continue
+        kept.append(line)
+    return ''.join(kept)
 
 def apply_phonetic_replacements(text):
     for phrase, phonetic in load_config().get('phonetic_replacements', {}).items():
@@ -797,7 +949,18 @@ def parse_reader_mode(text):
 
     line1, line2 = nonempty[0], nonempty[1]
 
-    if len(line1) <= MAX_AUTHOR_LINE_LEN or len(line2) <= MAX_AUTHOR_LINE_LEN:
+    if (len(line1) > MAX_TITLE_LINE_LEN) != (len(line2) > MAX_TITLE_LINE_LEN):
+        # Exactly one line is paragraph-length -- the pasted text has a
+        # title but no byline, so the paragraph is the start of the body.
+        # (Without this, the short title looked like a byline/site name
+        # and the paragraph, being longer, was wrongly chosen as title.)
+        if len(line1) > MAX_TITLE_LINE_LEN:
+            title, body_first_line = line2, line1
+        else:
+            title, body_first_line = line1, line2
+        candidate   = None
+        body_source = [body_first_line] + nonempty[2:]
+    elif len(line1) <= MAX_AUTHOR_LINE_LEN or len(line2) <= MAX_AUTHOR_LINE_LEN:
         # At least one of the first two lines is short enough to
         # plausibly be a byline/site name -- the longer is the title,
         # the shorter is the author/site candidate.

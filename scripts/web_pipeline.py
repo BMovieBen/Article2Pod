@@ -6,7 +6,7 @@ import subprocess
 import threading
 from utils import (
     safe_slug, clean_author, get_temp_folder, get_input_folder,
-    apply_phonetic_replacements, is_clipboard_domain, is_youtube_url,
+    apply_strip_lines, apply_phonetic_replacements, is_clipboard_domain, is_youtube_url,
     fetch_and_resize_image, JUNK_PATTERNS, READING_TIME_RE, parse_reader_mode,
     sanitize_filename, get_domain_override
 )
@@ -154,6 +154,7 @@ def process_text_paste(text, temp, input_dir):
     with open(os.path.join(input_dir, 'clipboard-handoff.json'), 'w', encoding='utf-8') as f:
         json.dump(handoff, f)
 
+    body   = apply_strip_lines(body, author)
     body   = apply_phonetic_replacements(body)
     # Byline line is left blank (not "Written by") when author is blank,
     # so nothing gets narrated -- but the line POSITION is kept stable

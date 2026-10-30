@@ -52,6 +52,16 @@ Optional. If the site has no usable image, Article2Pod can have ComfyUI make alb
 1. Copy `workflow\art-workflow-api.sample.json` to `art-workflow-api.json`, or use your own text-to-image workflow (API-format export).
 2. In `config.json`, set `art_workflow_file` and make sure `comfyui_generate` is in `art_sources`. The order of that list is the order sources get tried.
 
+## AI cleanup and quality check
+
+Both are optional, off in `config.sample.json`, and slow generation down, so switch them off with `"mode": "off"` when speed matters.
+
+- **`ai_cleanup`** runs after you click Generate. A text model in ComfyUI picks leftover junk lines such as captions, promos and repeated bylines, and checks the title, author and site. It only chooses lines to delete and never rewrites the article. Metadata you edited yourself is left alone. Modes: `off`, `log_only` (decide and log, change nothing), `apply`. If the model lists too many lines it is asked once more with a stricter prompt, and a reply that would remove more than `max_remove_fraction` (default 0.30) of the article is refused and the text is left alone.
+- **`ai_quality_check`** transcribes each generated chunk with Whisper (`asr_model_dir`) and compares it with the chunk's text, ignoring bracketed text and number or spelling differences that sound the same. In `retry` mode a chunk scoring under `min_match` is regenerated with a new seed, up to `max_attempts`, and the best attempt is kept. `log_only` scores and logs without regenerating. Whisper sits on the CPU between scores so it does not slow generation.
+- **Changing the text model:** copy `workflow\cleanup-workflow-api.sample.json` to `cleanup-workflow-api.json` (`ai_cleanup.workflow_file`) and edit the `CLIPLoader` node there to use a different text encoder. Keep the `{{prompt}}` and `{{system_prompt}}` placeholders and a `PreviewAny` node, which the reply is read from.
+- **Chunk size:** `chunk_word_count` (default 1400) sets how much text is generated at a time. Smaller chunks (400-500 words, about 5 minutes of audio) lose less work when a chunk fails or is retried. Chunks end at a paragraph break where possible.
+- **Stats** go to `log/` when `ai_stats_logging` is on: `ai-cleanup-stats.csv` and `ai-cleanup-details.jsonl` (what was removed or changed), `ai-quality-chunks.csv` (every attempt), `ai-quality-details.jsonl` (the words Whisper heard differently) and `ai-quality-articles.csv` (per article time and score). Compare against `generation-log.csv` for speed with the features off.
+
 ## Troubleshooting
 
 - **ComfyUI won't start:** launch ComfyUI Desktop by hand once, check `comfy_venv_python`, then look at `%APPDATA%\ComfyUI\logs\`.
