@@ -474,7 +474,7 @@ def generate_chunk_checked(slug, chunk_index, chunk_text, voice_file,
     }
     return last[0], last[1], last[2], total_gen, best['path'], stats
 
-def log_chunk_stats(slug, chunk_index, words, qc, stats):
+def log_chunk_stats(slug, chunk_index, words, qc, stats, voice_file=''):
     """One CSV row per generation attempt of a chunk (ai-quality-chunks.csv)."""
     kept = stats['best']
     for a in stats['attempts']:
@@ -484,6 +484,7 @@ def log_chunk_stats(slug, chunk_index, words, qc, stats):
         log_ai_stats('ai-quality-chunks.csv', {
             'timestamp':   datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'slug':        slug,
+            'voice':       voice_file,
             'chunk':       chunk_index,
             'words':       words,
             'mode':        qc['mode'],
@@ -640,7 +641,7 @@ def _generate(slug, voice_file, voice_full_path, full_text, word_count,
                        c_duration, detail)
         if c_stats:
             qc_stats.append(c_stats)
-            log_chunk_stats(slug, i, c_words, qc, c_stats)
+            log_chunk_stats(slug, i, c_words, qc, c_stats, voice_file)
 
         if status != 'success':
             for p in chunk_outputs:
