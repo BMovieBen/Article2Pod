@@ -7,3 +7,4 @@ ddgs
 yt-dlp
 flask
 fonttools
+pillow-heif

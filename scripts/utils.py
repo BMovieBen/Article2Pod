@@ -6,6 +6,12 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from readability import Document
 
+try:   # lets Pillow open AVIF/HEIC, which iOS browsers and some CDNs serve
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+except ImportError:
+    pass
+
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 APP_DIR     = os.path.dirname(SCRIPTS_DIR)
 CONFIG_FILE = os.path.join(APP_DIR, 'config.json')
