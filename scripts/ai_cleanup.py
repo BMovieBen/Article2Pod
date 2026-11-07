@@ -42,7 +42,10 @@ DELETE lines that are page furniture, such as:
 
 KEEP everything else: every sentence of reporting, analysis, opinion, quotes and narrative, and section headings that belong to the article. When unsure, KEEP the line. Never delete more than a small share of the article.
 
-METADATA: the detected values can be wrong or swapped. For example the "title" may really be the article's first paragraph while the true headline sits in the author field, or the author may be a website name. Return the correct values: title is the article's short headline (never a whole paragraph and never the site name; if the current title is a paragraph and a headline-like value exists in another field, use that); author is the person's name (or names), or "" if none is given anywhere; site is the publication or website name.
+METADATA: the detected values can be wrong, shifted or swapped. Typical mistakes: the "title" is really a sub-headline or the first sentence or paragraph of the article, while the true headline sits in the author or site field; or the author is a website name. Return the correct values:
+- title: the article's short headline. A long sentence that ends with a period and describes the story (a sub-headline or standfirst) is NOT the headline. If the current title looks like that, and a headline-like value (short, title-case, no ending period) appears in the author or site field or at the top of the article lines, use that value as the title. Never use a whole paragraph or the site name.
+- author: the person's name (or names), or "" if none is given anywhere. Never a headline or a website name.
+- site: the publication or website name, never a headline. Use the byline, the source URL or a line such as "Add The New York Times as a preferred source" to identify it.
 
 Reply with ONLY a JSON object, no commentary:
 {"remove": [line numbers], "title": "...", "author": "...", "site": "..."}"""
