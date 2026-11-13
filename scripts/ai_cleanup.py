@@ -97,16 +97,17 @@ def build_prompt(meta, body_lines, max_words):
 # ------------------------------------------------------------
 # LLM call through ComfyUI (CLIPLoader -> TextGenerate -> PreviewAny)
 # ------------------------------------------------------------
-def build_workflow(cfg, prompt):
+def build_workflow(cfg, prompt, system_prompt=None):
     """Loads the cleanup workflow (API-format JSON) and fills the
     {{prompt}} and {{system_prompt}} placeholders. Everything else, such
-    as the text model, lives in the file."""
+    as the text model, lives in the file. Other LLM steps (ai_art_prompt)
+    reuse it with their own system prompt."""
     path = os.path.join(APP_DIR, cfg['workflow_file'])
     if not os.path.isfile(path):          # fresh clone: fall back to the shipped sample
         path = path.replace('.json', '.sample.json')
     with open(path, 'r', encoding='utf-8') as f:
         wf = json.load(f)
-    fills = {'{{prompt}}': prompt, '{{system_prompt}}': SYSTEM_PROMPT}
+    fills = {'{{prompt}}': prompt, '{{system_prompt}}': system_prompt or SYSTEM_PROMPT}
     for node in wf.values():
         for key, val in node.get('inputs', {}).items():
             if isinstance(val, str) and val in fills:
@@ -119,13 +120,13 @@ def reply_node_id(wf):
             return node_id
     return None
 
-def run_llm(cfg, prompt):
+def run_llm(cfg, prompt, system_prompt=None):
     """Returns (text, error). Polls ComfyUI history until the prompt ends."""
     base = get_comfy_url()
     if stop_flag_set():
         return None, 'stop requested'
     try:
-        wf = build_workflow(cfg, prompt)
+        wf = build_workflow(cfg, prompt, system_prompt)
     except Exception as e:
         return None, f'could not load {cfg["workflow_file"]}: {e}'
     reply_id = reply_node_id(wf)

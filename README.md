@@ -51,6 +51,7 @@ Optional. If the site has no usable image, Article2Pod can have ComfyUI make alb
 
 1. Copy `workflow\art-workflow-api.sample.json` to `art-workflow-api.json`, or use your own text-to-image workflow (API-format export).
 2. In `config.json`, set `art_workflow_file` and make sure `comfyui_generate` is in `art_sources`. The order of that list is the order sources get tried.
+3. Optional: turn on `ai_art_prompt`. The text model from `ai_cleanup` then reads the title and the start of the cleaned article and writes a detailed image prompt, which replaces the `{{PROMPT}}` token in the art workflow's prompt node. If the step fails, the plain title template is used instead. Prompts are logged to `log/ai-art-prompts.jsonl`. The shipped `art-workflow-api.sample.json` is a MOSS-Image SFT workflow set up this way; it shares its Qwen 3.5 9B text encoder with the `ai_cleanup` text model.
 
 ## AI cleanup and quality check
 

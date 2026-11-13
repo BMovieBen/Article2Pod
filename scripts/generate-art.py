@@ -6,7 +6,7 @@
 # caller -- whatever fallback art fetch-metadata already saved is left
 # in place.
 
-import os, sys, json, time
+import os, sys, json, time, random
 import requests
 from utils import (
     get_comfy_url, get_art_workflow_file, get_art_prompt_node_title,
@@ -17,6 +17,11 @@ from utils import (
     prompt_vanished
 )
 from art_prompt import build_art_prompt, sanitize_title_for_prompt
+
+# Workflows can hold this token in their prompt node: it is replaced with
+# the LLM-written prompt (ai_art_prompt in config.json), or with the plain
+# art_prompt.py title template when that step is off or fails.
+PROMPT_TOKEN = '{{PROMPT}}'
 
 COMFY_URL   = get_comfy_url()
 TEMP_FOLDER = get_temp_folder()
@@ -35,8 +40,8 @@ def free_comfyui_memory():
           else '  Could not free ComfyUI memory (continuing anyway).')
     return ok
 
-def load_workflow():
-    path = get_art_workflow_file()
+def load_workflow(path=None):
+    path = path or get_art_workflow_file()
     if not path or not os.path.isfile(path):
         raise FileNotFoundError(f'Art workflow file not found: {path}')
     with open(path, 'r', encoding='utf-8') as f:
@@ -56,6 +61,13 @@ def find_prompt_node(workflow):
     CLIPTextEncode node, which is enough for simpler workflows with just
     one prompt node."""
     title = get_art_prompt_node_title()
+    for token in (PROMPT_TOKEN, get_art_prompt_placeholder()):
+        if not title and token:
+            hits = [nid for nid, n in workflow.items()
+                    if token in str(n.get('inputs', {}).get('text', '')) or
+                       token in str(n.get('inputs', {}).get('value', ''))]
+            if len(hits) == 1:
+                return hits[0]
     if title:
         for nid, n in workflow.items():
             if n.get('_meta', {}).get('title', '') == title:
@@ -76,7 +88,7 @@ def find_prompt_node(workflow):
         f'"art_prompt_node_title" in config.json to the title of the '
         f'node that should receive the article prompt.')
 
-def build_prompt_for_workflow(workflow, node_id, title):
+def build_prompt_for_workflow(workflow, node_id, title, llm_prompt=None):
     """Build the actual text to inject into the prompt node. If
     art_prompt_placeholder is configured, the workflow's own existing
     prompt text (e.g. a hardcoded style/quality string baked into the
@@ -90,12 +102,19 @@ def build_prompt_for_workflow(workflow, node_id, title):
     easy to not notice). If no placeholder is configured, this is
     unchanged from before: the full art_prompt.py template wholesale-
     replaces whatever was in the node."""
+    inputs        = workflow[node_id].get('inputs', {})
+    existing_text = inputs.get('text') or inputs.get('value') or ''
+    if PROMPT_TOKEN in existing_text:
+        return existing_text.replace(PROMPT_TOKEN, llm_prompt or build_art_prompt(title))
+    if llm_prompt:
+        # Old-style workflow without {{PROMPT}}: the LLM prompt replaces
+        # the whole node text, as the built-in template would.
+        return llm_prompt
+
     placeholder = get_art_prompt_placeholder()
     if not placeholder:
         return build_art_prompt(title)
 
-    inputs        = workflow[node_id].get('inputs', {})
-    existing_text = inputs.get('text') or inputs.get('value') or ''
     if placeholder not in existing_text:
         raise ValueError(
             f'art_prompt_placeholder "{placeholder}" is configured but '
@@ -106,9 +125,9 @@ def build_prompt_for_workflow(workflow, node_id, title):
     safe_title = sanitize_title_for_prompt(title)
     return existing_text.replace(placeholder, safe_title)
 
-def patch_workflow(workflow, title, filename_prefix):
+def patch_workflow(workflow, title, filename_prefix, llm_prompt=None):
     node_id     = find_prompt_node(workflow)
-    prompt_text = build_prompt_for_workflow(workflow, node_id, title)
+    prompt_text = build_prompt_for_workflow(workflow, node_id, title, llm_prompt)
 
     inputs = workflow[node_id].setdefault('inputs', {})
     if 'text' in inputs:
@@ -122,6 +141,11 @@ def patch_workflow(workflow, title, filename_prefix):
 
     preview = prompt_text[:80] + ('...' if len(prompt_text) > 80 else '')
     print(f'  Prompt:   {preview}')
+
+    # New seed every run, so re-generating an article's art gives a new image.
+    for n in workflow.values():
+        if 'seed' in n.get('inputs', {}) and not isinstance(n['inputs']['seed'], list):
+            n['inputs']['seed'] = random.randint(1, 2**50)
 
     save_class = get_art_save_node_class()
     for nid, n in workflow.items():
@@ -203,7 +227,20 @@ def _wait_for_image(prompt_id, timeout=300):
     print(f'  Timed out after {timeout}s')
     return 'timeout', f'Timed out after {timeout}s', None
 
-def generate_art(slug, title):
+def get_llm_prompt(slug, title, site=''):
+    """LLM-written image prompt, or None (step off or failed -> the
+    caller falls back to the title template). Never raises."""
+    try:
+        from ai_art_prompt import make_art_prompt
+        prompt, err = make_art_prompt(slug, title, site)
+        if not prompt and err != 'off':
+            print(f'  AI art prompt failed ({err}); using title template.')
+        return prompt
+    except Exception as e:
+        print(f'  AI art prompt error ({e}); using title template.')
+        return None
+
+def generate_art(slug, title, site=''):
     """Generate album art via ComfyUI for the given slug/title. Returns
     (ok, error). On success, overwrites temp/{slug}.jpg with a 500x500
     crop matching every other art source. Never raises -- caller treats
@@ -213,9 +250,12 @@ def generate_art(slug, title):
     start_time = time.time()
     free_comfyui_memory()
     try:
-        workflow = load_workflow()
+        workflow   = load_workflow()
+        llm_prompt = get_llm_prompt(slug, title, site)
+        if llm_prompt:
+            free_comfyui_memory()    # drop the text model before the image model loads
         prefix   = f'art_{slug}'
-        workflow = patch_workflow(workflow, title, prefix)
+        workflow = patch_workflow(workflow, title, prefix, llm_prompt)
 
         prompt_id = submit_workflow(workflow)
         if not prompt_id:
@@ -273,7 +313,7 @@ if __name__ == '__main__':
     with open(json_path, 'r', encoding='utf-8') as f:
         meta = json.load(f)
 
-    ok, err = generate_art(slug, meta.get('title', slug))
+    ok, err = generate_art(slug, meta.get('title', slug), meta.get('album', ''))
     if ok:
         print('  Art generation complete.')
     else:

@@ -91,8 +91,19 @@
     "mode": "off",
     "asr_model_dir": "C:\\path\\to\\whisper-large-v3-turbo",
     "device": "cuda",
-    "min_match": 0.9,
+    "min_match": 0.92,
     "max_attempts": 5
+  },
+  // Art prompt: when album art is generated (comfyui_generate in art_sources), the text model reads
+  // the title and the start of the article and writes a detailed image prompt for it. It fills the
+  // {{PROMPT}} token in the art workflow's prompt node. On failure the plain title template is used.
+  //   mode              off | on
+  //   workflow_file     text-model workflow, same format as ai_cleanup's
+  //   max_article_words how much of the article the model reads
+  "ai_art_prompt": {
+    "mode": "off",
+    "workflow_file": "workflow/cleanup-workflow-api.json",
+    "max_article_words": 700
   },
   // Write stats about both features to log/ai-*.csv so you can judge their effect on speed and quality.
   "ai_stats_logging": true,
@@ -106,7 +117,9 @@
   //   default          default_art.jpg
   //   none             stop here and use no art
   "art_sources": ["website", "image_search", "comfyui_generate", "favicon", "default"],
-  // Art workflow (ComfyUI API format), relative to the Article2Pod folder.
+  // Art workflow (ComfyUI API format), relative to the Article2Pod folder. A {{PROMPT}} token in the
+  // prompt node is replaced with the ai_art_prompt result (or the title template when that is off).
+  // The sample workflow uses MOSS-Image SFT.
   "art_workflow_file": "workflow\\art-workflow-api.json",
   // Title of the workflow node that holds the text prompt. Leave empty to auto-detect
   // when the workflow has just one prompt node (CLIPTextEncode).

@@ -101,8 +101,14 @@ AI_QUALITY_DEFAULTS = {
     'mode':          'off',          # off | log_only | retry
     'asr_model_dir': '',             # folder holding a Whisper checkpoint
     'device':        'cuda',         # cuda | cpu
-    'min_match':     0.90,           # 1 - word error rate needed to accept a chunk
+    'min_match':     0.92,           # 1 - word error rate needed to accept a chunk
     'max_attempts':  5,
+}
+AI_ART_PROMPT_DEFAULTS = {
+    'mode':              'off',      # off | on
+    'workflow_file':     'workflow/cleanup-workflow-api.json',   # same text-model workflow as ai_cleanup
+    'max_article_words': 700,        # how much of the article the model reads
+    'timeout_seconds':   300,
 }
 
 def _ai_section(name, defaults):
@@ -115,6 +121,9 @@ def get_ai_cleanup_config():
 
 def get_ai_quality_config():
     return _ai_section('ai_quality_check', AI_QUALITY_DEFAULTS)
+
+def get_ai_art_prompt_config():
+    return _ai_section('ai_art_prompt', AI_ART_PROMPT_DEFAULTS)
 
 def get_ai_stats_enabled():
     return bool(load_config().get('ai_stats_logging', True))
