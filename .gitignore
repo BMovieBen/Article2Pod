@@ -22,13 +22,16 @@ __pycache__/
 
 # Voice samples and audio files
 *.mp3
+voices/
 
 # OS
 .DS_Store
 Thumbs.db
 queue.json
-workflow/workflow-api.Q8.json
-workflow/workflow-api.Q4.json
+workflow/art-workflow-api.json
+workflow/cleanup-workflow-api.json
+workflow/workflow-api.json
+workflow/workflow-api.vibevoice-backup.json
+
 /art
 extra_model_paths.yaml
-workflow/art-workflow-api.json

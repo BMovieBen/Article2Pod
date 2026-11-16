@@ -368,6 +368,10 @@ def api_settings():
     text, n = re.subn(r'"voice_file"\s*:\s*"(?:[^"\\]|\\.)*"',
                       lambda m: new_line, text, count=1)
     if not n:
+        # No voice_file line yet: add one right after the opening brace.
+        text, n = re.subn(r'^\{[ \t]*\r?\n', lambda m: m.group(0) + '  ' + new_line + ',\n',
+                          text, count=1, flags=re.M)
+    if not n:
         return jsonify({'error': 'voice_file not found in config.json.'}), 500
     with open(config_path, 'w', encoding='utf-8') as f:
         f.write(text)

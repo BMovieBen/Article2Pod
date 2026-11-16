@@ -71,6 +71,42 @@ def count_errors(ref, hyp):
     return errors
 
 
+def transcribe(asr, device, path, max_seconds=0):
+    """Transcript of a voice sample for Breeze cloning. With max_seconds,
+    also picks a cut point: the last sentence end at or before that time,
+    so a long sample can be trimmed together with its transcript.
+    Returns {"text", "cut_seconds" (None = no trim needed), "asr_seconds"}."""
+    import torch
+    start = time.time()
+    if device == 'cuda':
+        asr.model.to('cuda')
+    try:
+        out = asr(path, return_timestamps='word',
+                  generate_kwargs={'language': 'en', 'task': 'transcribe'})
+    finally:
+        if device == 'cuda':
+            asr.model.to('cpu')
+            torch.cuda.empty_cache()
+    chunks = out.get('chunks') or []
+    end    = max((c['timestamp'][1] or 0) for c in chunks) if chunks else 0
+    text, cut = out['text'].strip(), None
+    if max_seconds and end > max_seconds and chunks:
+        keep, last_ok = [], None
+        for c in chunks:
+            t_end = c['timestamp'][1] or c['timestamp'][0] or 0
+            if t_end > max_seconds:
+                break
+            keep.append(c)
+            if c['text'].rstrip().endswith(('.', '?', '!')):
+                last_ok = (len(keep), t_end)
+        if last_ok:
+            keep, cut = keep[:last_ok[0]], last_ok[1] + 0.15
+        else:
+            cut = (keep[-1]['timestamp'][1] or max_seconds) + 0.15 if keep else max_seconds
+        text = ''.join(c['text'] for c in keep).strip()
+    return {'text': text, 'cut_seconds': cut, 'asr_seconds': round(time.time() - start, 2)}
+
+
 def main():
     model_dir, device = sys.argv[1], sys.argv[2]
     try:
@@ -105,6 +141,9 @@ def main():
         try:
             req   = json.loads(line)
             start = time.time()
+            if 'transcribe' in req:
+                reply(transcribe(asr, device, req['transcribe'], float(req.get('max_seconds') or 0)))
+                continue
             if device == 'cuda':
                 asr.model.to('cuda')
             try:

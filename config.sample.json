@@ -1,11 +1,12 @@
 // Article2Pod configuration.
-// Copy this file to config.json and edit the values for your system.
+// Copy this file to config.json and keep only the values you want to change: every key is optional.
+// Paths default to ComfyUI Desktop's standard locations (its data folder is read from
+// %APPDATA%\ComfyUI\config.json), so a standard Desktop install needs almost nothing here.
 // "//" comments are allowed. Paths on Windows need doubled backslashes (\\).
-// Only the keys marked REQUIRED must be set; everything else has a default.
 {
   // ───────────────────────── Voice ─────────────────────────
-  // REQUIRED. Default voice sample (an mp3 in voice_folder). Use "shuffle" for a random one.
-  // The gear icon in the web UI rewrites this line.
+  // Default voice sample (an mp3 in voice_folder). Use "shuffle" for a random one.
+  // Default: the first mp3 in voice_folder. The gear icon in the web UI rewrites (or adds) this line.
   "voice_file": "your-voice-sample.mp3",
   // Folder holding your voice sample mp3s. Default: Article2Pod\voices
   "voice_folder": "C:\\ComfyUI\\Article2Pod\\voices",
@@ -15,48 +16,57 @@
   "web_port": 8080,
   // Queue save file, relative to the Article2Pod folder. Default: queue.json
   "queue_file": "queue.json",
-  // Console logging: "verbose", "on_error" or "off"
+  // Console logging: "verbose", "on_error" or "off". Default: off
   "log_level": "on_error",
 
   // ───────────────────────── ComfyUI launch ─────────────────────────
-  // REQUIRED. Address of the ComfyUI server Article2Pod starts and talks to.
+  // In the defaults below, <data> is ComfyUI Desktop's data folder (for example C:\ComfyUI) and
+  // <install> is the Desktop app folder under %LOCALAPPDATA%.
+  // Address of the ComfyUI server Article2Pod starts and talks to. Default: http://127.0.0.1:8000
   "comfy_url": "http://127.0.0.1:8000",
   // Address ComfyUI binds to. Default 0.0.0.0 (reachable on your LAN). Use 127.0.0.1 for this PC only.
   // "comfy_listen_host": "0.0.0.0",
-  // REQUIRED. Your ComfyUI folder.
-  "comfy_base": "C:\\ComfyUI",
-  // REQUIRED. Python inside ComfyUI's virtual environment.
+  // Location of ComfyUI Desktop's app files, relative to %LOCALAPPDATA%. Default: detected, either
+  // Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI (current Desktop) or
+  // Programs\@comfyorgcomfyui-electron\resources\ComfyUI (older Desktop). Set it only for a non-standard install.
+  "comfy_electron_relative": "Comfy-Desktop\\ComfyUI-Installs\\ComfyUI\\ComfyUI",
+  // ComfyUI base folder (its models, custom_nodes and user data). Default: the <install> folder on
+  // current Desktop builds, the <data> folder on older ones.
+  "comfy_base": "C:\\Users\\yourname\\AppData\\Local\\Comfy-Desktop\\ComfyUI-Installs\\ComfyUI\\ComfyUI",
+  // Python inside ComfyUI's virtual environment. Default: <data>\.venv\Scripts\python.exe
   "comfy_venv_python": "C:\\ComfyUI\\.venv\\Scripts\\python.exe",
-  // REQUIRED. Location of ComfyUI Desktop's app files, relative to %LOCALAPPDATA%.
-  // Only change this if you have a non-standard install.
-  "comfy_electron_relative": "Programs\\@comfyorgcomfyui-electron\\resources\\ComfyUI",
   // Seconds to wait for ComfyUI to come up. Raise for slow machines or big models. Default: 120
   "comfy_startup_timeout": 120,
-  // Extra command-line flags passed to ComfyUI, e.g. ["--fast"]
+  // Extra command-line flags passed to ComfyUI, e.g. ["--use-sage-attention"]. Default: none
   "comfy_extra_args": [],
-  // Model folders to register with ComfyUI (Comfy Desktop keeps models outside the install).
-  // Accepts one path or a list. Optional.
+  // Model folders to register with ComfyUI (Comfy Desktop keeps models outside the install). One path
+  // or a list; folders that don't exist are skipped.
+  // Default: <data>\models and %LOCALAPPDATA%\Comfy-Desktop\ComfyUI-Shared\models
   "comfy_shared_models_path": [
     "C:\\ComfyUI\\models",
     "C:\\Users\\yourname\\AppData\\Local\\Comfy-Desktop\\ComfyUI-Shared\\models"
   ],
-  // A second install's custom_nodes folder to also load nodes from. Optional.
-  "comfy_extra_custom_nodes_path": "C:\\Users\\yourname\\AppData\\Local\\Comfy-Desktop\\ComfyUI-Installs\\ComfyUI\\ComfyUI\\custom_nodes",
+  // Another custom_nodes folder to also load nodes from (skipped if it doesn't exist).
+  // Default: <data>\custom_nodes
+  "comfy_extra_custom_nodes_path": "C:\\ComfyUI\\custom_nodes",
 
   // ───────────────────────── Folders and files ─────────────────────────
-  // REQUIRED. ComfyUI input folder. The article text and voice sample are placed here.
+  // ComfyUI input folder. The article text and voice sample are placed here. Default: <data>\input
   "input_folder": "C:\\ComfyUI\\input",
-  // REQUIRED. Where ComfyUI drops generated mp3s before they get tagged.
-  "audio_folder": "C:\\ComfyUI\\output\\audio",
-  // REQUIRED. ComfyUI output root.
+  // ComfyUI output root. Default: <data>\output
   "output_folder": "C:\\ComfyUI\\output",
-  // REQUIRED. Track number log, relative to the Article2Pod folder.
+  // Where ComfyUI drops generated audio before it gets tagged.
+  // Default: output_folder plus the folder part of audio_output_prefix (<data>\output\audio)
+  "audio_folder": "C:\\ComfyUI\\output\\audio",
+  // Track number log, relative to the Article2Pod folder. Default: log\track-log.json
   "track_log": "log\\track-log.json",
 
   // ───────────────────────── Audio generation ─────────────────────────
-  // REQUIRED. Audio workflow (ComfyUI API format), relative to the Article2Pod folder.
+  // Audio workflow (ComfyUI API format), relative to the Article2Pod folder. Default: workflow\workflow-api.json
+  // The TTS engine is picked from the nodes in this file: copy workflow\workflow-api.vibevoice.sample.json
+  // or workflow\workflow-api.breeze.sample.json to workflow-api.json.
   "workflow_file": "workflow\\workflow-api.json",
-  // REQUIRED. Filename prefix of your workflow's SaveAudioMP3 node.
+  // VibeVoice only. Filename prefix of your workflow's SaveAudioMP3 node. Default: audio/podcast
   "audio_output_prefix": "audio/podcast",
   // Long articles are split into chunks of about this many words, ending at a paragraph break where possible. Default: 1400
   "chunk_word_count": 1400,
@@ -64,6 +74,91 @@
   "audio_normalize_enabled": false,
   // Save a log of each generation run. Default: true
   "generation_logging_enabled": false,
+
+  // ───────────────────────── Breeze TTS 2 (only used with the Breeze workflow) ─────────────────────────
+  // Every key is optional. Leave out anything you don't want to change: the values shown are the
+  // built-in defaults, tuned by ear. Before the voice reads an article, the text model from ai_cleanup
+  // picks the article's genre and which sentences are quotes. Each genre has a voice direction (how to
+  // read) and a guidance value (how strongly to apply it: 1.0 ignores the direction, low values keep more
+  // of the voice sample's own personality, high values follow the direction more closely but can flatten
+  // the voice). Most specific wins: domain_overrides > a voice's genre settings > a voice's own settings >
+  // genres > the global values here.
+  // The voice sample's transcript is created on first use (voices\<name>.txt; edit it if Whisper misheard;
+  // it is only remade if you replace the mp3 with a newer file)
+  // using ai_quality_check.asr_model_dir. Samples over 60 seconds are trimmed (voices\<name>.breeze.wav).
+  // When ai_quality_check.mode is "retry", each piece is checked with Whisper and regenerated with a new
+  // seed if it scores below min_match (short pieces are allowed two misheard words).
+  "breeze": {
+    // Guidance for the narration in genres that don't set their own (entertainment, tech_gaming,
+    // feature, humor, interview).
+    "guidance": 1.5,
+    // Guidance for quotes in genres that don't set their own.
+    "quote_guidance": 2.5,
+    // Variation in delivery. 0.9 is Breeze's default; higher is more varied but can slur words.
+    "temperature": 0.9,
+    // Seed for the first take of every piece (same seed + same text = same audio). Retries use random seeds.
+    "seed": 42,
+    // Genre used when genre_mode is "off" or the text model fails.
+    "default_genre": "news",
+    // How the genre is picked: "llm" (the text model reads the article) or "off" (always default_genre,
+    // unless a site in domain_overrides sets "genre").
+    "genre_mode": "llm",
+    // How quotes are found: "llm" (text model, checked against the quotation marks), "marks" (quotation
+    // marks only) or "off" (only indented block quotes).
+    "quote_mode": "llm",
+    // The article is generated in pieces of up to this many words. Lowered automatically for long voice
+    // samples, because Breeze fits the sample and the text into one 2048-token window.
+    "max_segment_words": 170,
+    // Longest voice sample used, in seconds (60 is Breeze's limit).
+    "max_reference_seconds": 60,
+    // Silence between pieces, in seconds: between two pieces of narration (or two of quotes), where
+    // narration and quotes switch, after the title, and at the end of the episode.
+    "sentence_gap": 0.45,
+    "switch_gap": 0.65,
+    "title_gap": 0.9,
+    "end_pause": 3.0,
+    // Text-model workflow used for genre and quotes (the same one ai_cleanup uses).
+    "workflow_file": "workflow/cleanup-workflow-api.json",
+    // Seconds to wait for the text model, including time queued behind other ComfyUI jobs. If it times
+    // out, default_genre and the quotation-mark check are used.
+    "timeout_seconds": 1800,
+    // Changes to the built-in genre presets. Genres: opinion, news, entertainment, tech_gaming, feature,
+    // humor, interview. Only list what you want to change; the rest of the preset is kept. Keys:
+    //   narrator           voice direction for the writer's own words
+    //   narrator_guidance  guidance for the narration (falls back to "guidance" above)
+    //   quote              voice direction for quotes
+    //   quote_guidance     guidance for quotes (falls back to "quote_guidance" above)
+    //   quote_cue          spoken before each quote, e.g. "Quote:" ("" for none)
+    //   quote_end_pause    seconds of silence after a quote
+    //   temperature        variation in delivery for this genre
+    // Built-in values of the two presets tuned by ear:
+    //   opinion: narrator "Lively, animated, cheeky British comic delivery with a brisk pace, sarcastic
+    //            emphasis and lots of expression." at 1.25; quotes in the news-anchor voice at 2.5, no cue
+    //   news:    "Confident, energetic news anchor delivery: loud, clear, brisk and authoritative." at 2.5
+    //            for narration and quotes, quote_cue "Quote:", quote_end_pause 1.0
+    "genres": {
+      // "entertainment": { "narrator_guidance": 1.25, "temperature": 1.0 },
+      // "news": { "quote_cue": "", "quote_end_pause": 0.65 }
+    },
+    // Per-voice settings, for voices the defaults don't suit. Keyed by the voice's file name in voice_folder
+    // (case doesn't matter, ".mp3" optional). Used whenever that voice reads an article, from shuffle, the
+    // default voice, a per-site voice or a per-article pick. Only list what you want to change.
+    //   guidance         narration guidance for this voice in every genre (beats the genre presets)
+    //   quote_guidance, temperature, narrator, quote, quote_cue, quote_end_pause
+    //                    same meaning as in "genres", applied to every genre for this voice
+    //   genres           this voice's settings for one genre, same keys as "genres" above; beats the
+    //                    voice's own settings
+    "voices": {
+      // "JamesRolfe.mp3": {
+      //   "temperature": 1.0,
+      //   "genres": {
+      //     "news": { "narrator_guidance": 2.0 },
+      //     "opinion": { "narrator": "Exasperated, ranting delivery with sarcastic emphasis and a brisk pace." }
+      //   }
+      // },
+      // "JaneLeeves.mp3": { "guidance": 1.75 }
+    }
+  },
 
   // ───────────────────────── AI cleanup & quality check (optional, slower) ─────────────────────────
   // Both features are off by default. They add time to every article, so turn them off
@@ -117,7 +212,8 @@
   //   default          default_art.jpg
   //   none             stop here and use no art
   "art_sources": ["website", "image_search", "comfyui_generate", "favicon", "default"],
-  // Art workflow (ComfyUI API format), relative to the Article2Pod folder. A {{PROMPT}} token in the
+  // Art workflow (ComfyUI API format), relative to the Article2Pod folder. Default: workflow\art-workflow-api.json
+  // if that file exists, otherwise no ComfyUI art. A {{PROMPT}} token in the
   // prompt node is replaced with the ai_art_prompt result (or the title template when that is off).
   // The sample workflow uses MOSS-Image SFT.
   "art_workflow_file": "workflow\\art-workflow-api.json",
@@ -133,7 +229,7 @@
   // "art_prompt_placeholder": "{title}",
 
   // ───────────────────────── Article scraping ─────────────────────────
-  // User agent sent when fetching pages. REQUIRED.
+  // User agent sent when fetching pages. Default: Mozilla/5.0
   "user_agent": "Mozilla/5.0",
   // Sites that block scraping or are paywalled. These go straight to paste mode.
   "clipboard_domains": [
@@ -158,10 +254,22 @@
   // Settings for one site. Matches the domain and its subdomains.
   //   voice_file  voice to use for this site
   //   art_path    image to always use as the art (relative to the Article2Pod folder)
+  //   Breeze only (all optional):
+  //   genre                  always use this genre's preset for the site (skips the text model's guess)
+  //   breeze_narrator        voice direction for the narration
+  //   breeze_guidance        guidance for the narration
+  //   breeze_quote           voice direction for quotes
+  //   breeze_quote_guidance  guidance for quotes
+  //   breeze_quote_cue       spoken before quotes ("" for none)
+  //   breeze_temperature     variation in delivery
   "domain_overrides": {
     "sample.com": {
       "voice_file": "your-voice-sample.mp3",
       "art_path": "art\\sample-default.jpg"
+    },
+    "columnist-site.com": {
+      "genre": "opinion",
+      "breeze_guidance": 1.25
     }
   }
 }

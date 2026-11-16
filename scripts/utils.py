@@ -46,9 +46,83 @@ def load_config():
             return json.loads(strip_json_comments(f.read()))
     return {}
 
+# ------------------------------------------------------------
+# Defaults for settings config.json can leave out
+# ------------------------------------------------------------
+# Folder names inside the ComfyUI Desktop install, under %LOCALAPPDATA%.
+COMFY_ELECTRON_RELATIVE = os.path.join('Comfy-Desktop', 'ComfyUI-Installs', 'ComfyUI', 'ComfyUI')
+COMFY_SHARED_MODELS_RELATIVE = os.path.join('Comfy-Desktop', 'ComfyUI-Shared', 'models')
+
+def get_comfy_desktop_base_path():
+    """ComfyUI Desktop's data folder (the one holding input, output,
+    models, custom_nodes and .venv). Read from Desktop's own settings
+    (%APPDATA%\\ComfyUI\\config.json, "basePath"); if that can't be read,
+    assume Article2Pod sits inside it (e.g. C:\\ComfyUI\\Article2Pod)."""
+    try:
+        with open(os.path.join(os.environ.get('APPDATA', ''), 'ComfyUI', 'config.json'),
+                  encoding='utf-8') as f:
+            base = json.load(f).get('basePath')
+        if base and os.path.isdir(base):
+            return base
+    except Exception:
+        pass
+    return os.path.dirname(APP_DIR)
+
+def _default_output_folder():
+    return os.path.join(get_comfy_desktop_base_path(), 'output')
+
+# Older ComfyUI Desktop builds kept the app files here instead (also under %LOCALAPPDATA%).
+COMFY_ELECTRON_RELATIVE_OLD = os.path.join('Programs', '@comfyorgcomfyui-electron', 'resources', 'ComfyUI')
+
+def _default_electron_relative():
+    """Whichever Desktop layout is installed; the current one if neither is found."""
+    local = os.environ.get('LOCALAPPDATA', '')
+    for rel in (COMFY_ELECTRON_RELATIVE, COMFY_ELECTRON_RELATIVE_OLD):
+        if os.path.isfile(os.path.join(local, rel, 'main.py')):
+            return rel
+    return COMFY_ELECTRON_RELATIVE
+
+def _default_comfy_base():
+    """Current Desktop builds keep models, custom_nodes and user data in the
+    install folder itself; older builds kept them in the Desktop data folder."""
+    rel = get_config_value('comfy_electron_relative')
+    if os.path.normcase(rel) == os.path.normcase(COMFY_ELECTRON_RELATIVE_OLD):
+        return get_comfy_desktop_base_path()
+    return os.path.join(os.environ.get('LOCALAPPDATA', ''), rel)
+
+CONFIG_DEFAULTS = {
+    'comfy_url':               'http://127.0.0.1:8000',   # ComfyUI Desktop's default port
+    'comfy_electron_relative': _default_electron_relative,
+    'comfy_base':              _default_comfy_base,
+    'comfy_venv_python':       lambda: os.path.join(get_comfy_desktop_base_path(), '.venv', 'Scripts', 'python.exe'),
+    'comfy_shared_models_path': lambda: [os.path.join(get_comfy_desktop_base_path(), 'models'),
+                                         os.path.join(os.environ.get('LOCALAPPDATA', ''), COMFY_SHARED_MODELS_RELATIVE)],
+    'comfy_extra_custom_nodes_path': lambda: os.path.join(get_comfy_desktop_base_path(), 'custom_nodes'),
+    'input_folder':            lambda: os.path.join(get_comfy_desktop_base_path(), 'input'),
+    'output_folder':           _default_output_folder,
+    # where ComfyUI's SaveAudio node writes: output folder + the prefix's folder part
+    'audio_folder':            lambda: os.path.join(get_config_value('output_folder'),
+                                                    os.path.dirname(get_config_value('audio_output_prefix')) or ''),
+    'audio_output_prefix':     'audio/podcast',
+    'workflow_file':           os.path.join('workflow', 'workflow-api.json'),
+    'art_workflow_file':       lambda: (os.path.join('workflow', 'art-workflow-api.json')
+                                        if os.path.isfile(os.path.join(APP_DIR, 'workflow', 'art-workflow-api.json'))
+                                        else None),
+    'track_log':               os.path.join('log', 'track-log.json'),
+    'user_agent':              'Mozilla/5.0',
+}
+
+def get_config_value(key):
+    """config.json value, or the built-in default from CONFIG_DEFAULTS."""
+    value = load_config().get(key)
+    if value is None:
+        value = CONFIG_DEFAULTS.get(key)
+        if callable(value):
+            value = value()
+    return value
+
 def get_required(key):
-    config = load_config()
-    value  = config.get(key)
+    value = get_config_value(key)
     if value is None:
         raise KeyError(f'Missing required config key: "{key}". Please check config.json.')
     return value
@@ -110,6 +184,126 @@ AI_ART_PROMPT_DEFAULTS = {
     'max_article_words': 700,        # how much of the article the model reads
     'timeout_seconds':   300,
 }
+
+# ------------------------------------------------------------
+# Breeze TTS 2 (used only when the audio workflow contains Breeze nodes)
+# ------------------------------------------------------------
+# Voice directions tested by ear during the Breeze evaluation. Guidance
+# (cfg) is how strongly a direction is applied: low keeps more of the
+# voice sample's own delivery; 1.0 ignores the direction entirely.
+BREEZE_ANCHOR = 'Confident, energetic news anchor delivery: loud, clear, brisk and authoritative.'
+BREEZE_GENRE_DEFAULTS = {
+    # tuned by ear
+    'opinion': {
+        'narrator': 'Lively, animated, cheeky British comic delivery with a brisk pace, '
+                    'sarcastic emphasis and lots of expression.',
+        'narrator_guidance': 1.25,
+        'quote': BREEZE_ANCHOR, 'quote_guidance': 2.5,
+        'quote_cue': '', 'quote_end_pause': 0.65,
+    },
+    'news': {
+        'narrator': BREEZE_ANCHOR, 'narrator_guidance': 2.5,
+        'quote': BREEZE_ANCHOR, 'quote_guidance': 2.5,
+        'quote_cue': 'Quote:', 'quote_end_pause': 1.0,
+    },
+    # starting points, not yet tuned by ear (guidance comes from the global default)
+    'entertainment': {
+        'narrator': 'Warm, upbeat and lightly playful conversational delivery with personality and a brisk pace.',
+        'quote': BREEZE_ANCHOR, 'quote_cue': '', 'quote_end_pause': 0.65,
+    },
+    'tech_gaming': {
+        'narrator': 'Enthusiastic, knowledgeable and conversational delivery, like a friendly expert host, '
+                    'with a brisk pace.',
+        'quote': BREEZE_ANCHOR, 'quote_cue': '', 'quote_end_pause': 0.65,
+    },
+    'feature': {
+        'narrator': 'Engaging, thoughtful storytelling delivery with natural variety in pace and emphasis.',
+        'quote': BREEZE_ANCHOR, 'quote_cue': '', 'quote_end_pause': 0.65,
+    },
+    'humor': {
+        'narrator': 'Playful, cheeky comic delivery with crisp timing and lots of expression.',
+        'quote': BREEZE_ANCHOR, 'quote_cue': '', 'quote_end_pause': 0.65,
+    },
+    'interview': {
+        'narrator': 'Curious, friendly and conversational delivery with a brisk pace.',
+        'quote': BREEZE_ANCHOR, 'quote_cue': '', 'quote_end_pause': 0.65,
+    },
+}
+BREEZE_GENRES = list(BREEZE_GENRE_DEFAULTS)
+BREEZE_DEFAULTS = {
+    'default_genre':      'news',   # used when classification is off or fails
+    'guidance':           1.5,      # global narrator guidance for presets that don't set one
+    'quote_guidance':     2.5,      # global quote guidance for presets that don't set one
+    'temperature':        0.9,      # 0.9 = Breeze default; higher = more varied delivery
+    'seed':               42,       # first attempt of every segment; retries pick new seeds
+    'max_segment_words':  170,      # lowered automatically for long voice samples
+    'max_reference_seconds': 60,    # Breeze's hard limit; longer samples are trimmed
+    'sentence_gap':       0.45,     # silence between segments of the same kind (seconds)
+    'switch_gap':         0.65,     # silence where narration and quotes switch
+    'title_gap':          0.9,
+    'end_pause':          3.0,      # silence for the trailing [pause:3000]
+    'genre_mode':         'llm',    # llm | off  (off = default_genre unless a site pins one)
+    'quote_mode':         'llm',    # llm | marks | off  (marks = quotation-mark heuristic only)
+    'workflow_file':      'workflow/cleanup-workflow-api.json',   # text-model workflow for genre/quotes
+    'timeout_seconds':    1800,     # includes time queued behind other ComfyUI jobs
+    'genres':             {},       # per-genre overrides, merged over the built-in presets
+    'voices':             {},       # per-voice overrides, keyed by voice file name
+}
+
+def get_breeze_config():
+    cfg = dict(BREEZE_DEFAULTS)
+    cfg.update(load_config().get('breeze') or {})
+    return cfg
+
+BREEZE_PRESET_KEYS = ('narrator', 'narrator_guidance', 'quote', 'quote_guidance',
+                      'quote_cue', 'quote_end_pause', 'temperature')
+
+def get_breeze_voice_settings(voice_file, cfg=None):
+    """The "breeze" -> "voices" entry for one voice sample. Matched by file
+    name, ignoring case and the .mp3 extension ("JamesRolfe.mp3" or
+    "JamesRolfe")."""
+    cfg = cfg or get_breeze_config()
+    if not voice_file:
+        return {}
+    want = os.path.splitext(os.path.basename(voice_file))[0].lower()
+    for name, settings in (cfg.get('voices') or {}).items():
+        if os.path.splitext(os.path.basename(name))[0].lower() == want and isinstance(settings, dict):
+            return settings
+    return {}
+
+def get_breeze_preset(genre, site_override=None, cfg=None, voice_file=None):
+    """Resolve the voice settings for one article. Precedence, most
+    specific wins: site (domain_overrides) > the voice's settings for this
+    genre > the voice's own settings > genre preset > global "breeze"
+    values. Returns a dict with genre, narrator, quote, narrator_guidance,
+    quote_guidance, temperature, quote_cue and quote_end_pause."""
+    cfg   = cfg or get_breeze_config()
+    genre = genre if genre in BREEZE_GENRE_DEFAULTS else cfg['default_genre']
+    preset = {
+        'narrator_guidance': cfg['guidance'],
+        'quote_guidance':    cfg['quote_guidance'],
+        'temperature':       cfg['temperature'],
+        'quote_cue':         '',
+        'quote_end_pause':   cfg['switch_gap'],
+    }
+    preset.update(BREEZE_GENRE_DEFAULTS.get(genre, {}))
+    preset.update((cfg.get('genres') or {}).get(genre, {}))
+    # per voice: "guidance" is shorthand for narrator_guidance in every genre
+    voice = get_breeze_voice_settings(voice_file, cfg)
+    for layer in (voice, (voice.get('genres') or {}).get(genre) or {}):
+        if layer.get('guidance') is not None:
+            preset['narrator_guidance'] = layer['guidance']
+        preset.update({k: v for k, v in layer.items() if k in BREEZE_PRESET_KEYS and v is not None})
+    site = site_override or {}
+    for src, dst in (('breeze_narrator', 'narrator'), ('breeze_quote', 'quote'),
+                     ('breeze_guidance', 'narrator_guidance'),
+                     ('breeze_quote_guidance', 'quote_guidance'),
+                     ('breeze_temperature', 'temperature'),
+                     ('breeze_quote_cue', 'quote_cue')):
+        if site.get(src) is not None:
+            preset[dst] = site[src]
+    preset['genre'] = genre
+    return preset
 
 def _ai_section(name, defaults):
     cfg = dict(defaults)
@@ -177,7 +371,7 @@ def get_art_sources():
     )
 
 def get_art_workflow_file():
-    path = load_config().get('art_workflow_file')
+    path = get_config_value('art_workflow_file')
     return os.path.join(APP_DIR, path) if path else None
 
 def get_art_prompt_node_title():
@@ -199,7 +393,7 @@ def get_comfy_shared_models_paths():
     physically separate model directories are common with Comfy Desktop
     (e.g. an install's own models folder AND Desktop's separate Shared
     Directories folder are not the same location)."""
-    value = load_config().get('comfy_shared_models_path')
+    value = get_config_value('comfy_shared_models_path')
     if not value:
         return []
     if isinstance(value, str):
@@ -207,7 +401,7 @@ def get_comfy_shared_models_paths():
     return list(value)
 
 def get_comfy_extra_custom_nodes_path():
-    return load_config().get('comfy_extra_custom_nodes_path')
+    return get_config_value('comfy_extra_custom_nodes_path')
 
 def get_extra_model_paths_file():
     return os.path.join(APP_DIR, 'extra_model_paths.yaml')

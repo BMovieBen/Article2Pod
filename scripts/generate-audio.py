@@ -12,6 +12,7 @@ from utils import (
     prompt_vanished, get_ai_quality_config, log_ai_stats, log_ai_detail
 )
 from ai_quality import ASRWorker
+from tts_engine import load_workflow_file, detect_engine, BREEZE
 
 COMFY_URL     = get_comfy_url()
 WORKFLOW_FILE = get_workflow_file()
@@ -66,8 +67,8 @@ def get_voice_file(override=None):
     sys.exit(1)
 
 def load_workflow():
-    with open(WORKFLOW_FILE, 'r', encoding='utf-8') as f:
-        return json.load(f)
+    # drops non-node entries such as the samples' "_readme" note
+    return load_workflow_file(WORKFLOW_FILE)
 
 def get_article_txt_from_workflow():
     for node_id, node in load_workflow().items():
@@ -570,6 +571,29 @@ def main(slug, voice_override=None):
         print(f'  Copied voice to input folder.')
 
     article_path = os.path.join(INPUT_FOLDER, ARTICLE_TXT)
+
+    # The TTS engine is whatever the audio workflow contains (tts_engine.py).
+    workflow = load_workflow()
+    engine   = detect_engine(workflow)
+    if engine is None:
+        print(f'  The audio workflow ({os.path.basename(WORKFLOW_FILE)}) has neither VibeVoice nor '
+              f'Breeze TTS 2 nodes. Copy workflow/workflow-api.vibevoice.sample.json or '
+              f'workflow/workflow-api.breeze.sample.json to workflow-api.json.')
+        sys.exit(1)
+    if engine == BREEZE:
+        print('  Engine:   Breeze TTS 2')
+        import breeze_audio
+        start_time = time.time()
+        status, detail, stats = breeze_audio.run(slug, workflow, voice_file,
+                                                 voice_full_path, article_path)
+        words = (stats or {}).get('words', 0)
+        log_generation(slug, words, voice_file, status, time.time() - start_time, detail)
+        if status != 'success':
+            print(f'  Breeze generation failed: {detail}')
+            sys.exit(1)
+        normalize_audio_step(slug, os.path.join(AUDIO_FOLDER, f'{slug}.mp3'), words, voice_file)
+        return
+
     with open(article_path, 'r', encoding='utf-8') as f:
         full_text = f.read()
     word_count = len(full_text.split())

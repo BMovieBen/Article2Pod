@@ -6,7 +6,7 @@ import requests
 from utils import (
     load_config, get_comfy_url, get_comfy_listen_host, get_temp_folder,
     get_input_folder, get_audio_folder, build_extra_model_paths_yaml,
-    get_comfyui_console_log_path, free_comfyui_memory,
+    get_comfyui_console_log_path, free_comfyui_memory, get_required,
     set_stop_flag, clear_stop_flag, get_registered_comfy_prompts,
     clear_comfy_prompt_registry, get_ai_cleanup_config
 )
@@ -38,9 +38,9 @@ def start_comfyui():
     print('[Article2Pod] Starting ComfyUI...')
     config        = load_config()
     comfy_url     = get_comfy_url()
-    comfy_base    = config['comfy_base']
+    comfy_base    = get_required('comfy_base')
     local_appdata = os.environ.get('LOCALAPPDATA', '')
-    electron_rel  = config['comfy_electron_relative']
+    electron_rel  = get_required('comfy_electron_relative')
     main_py       = os.path.join(local_appdata, electron_rel, 'main.py')
     front_end     = os.path.join(local_appdata, electron_rel,
                                  'web_custom_versions', 'desktop_app')
@@ -49,10 +49,10 @@ def start_comfyui():
     print(f'[Article2Pod] ComfyUI will listen on {listen_host}:{port}')
 
     args = [
-        config['comfy_venv_python'], main_py,
+        get_required('comfy_venv_python'), main_py,
         '--user-directory',           os.path.join(comfy_base, 'user'),
-        '--input-directory',          config['input_folder'],
-        '--output-directory',         config['output_folder'],
+        '--input-directory',          get_input_folder(),
+        '--output-directory',         get_required('output_folder'),
         '--base-directory',           comfy_base,
         '--database-url',
             f"sqlite:///{comfy_base.replace(chr(92), '/')}/user/comfyui.db",

@@ -14,7 +14,7 @@
 # Whisper runs in a helper process under ComfyUI's Python (asr_worker.py).
 
 import os, sys, json, subprocess, threading, time
-from utils import load_config, get_ai_quality_config
+from utils import load_config, get_ai_quality_config, get_config_value
 
 WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'asr_worker.py')
 
@@ -31,7 +31,7 @@ class ASRWorker:
         if not os.path.isdir(model_dir):
             self.error = f'asr_model_dir not found: {model_dir!r}'
             return False
-        python = load_config().get('comfy_venv_python') or sys.executable
+        python = get_config_value('comfy_venv_python') or sys.executable
         self.proc = subprocess.Popen(
             [python, WORKER, model_dir, self.cfg.get('device', 'cuda')],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -68,6 +68,18 @@ class ASRWorker:
         try:
             self.proc.stdin.write(json.dumps(
                 {'path': mp3_path, 'reference': reference_text}) + '\n')
+            self.proc.stdin.flush()
+        except Exception as e:
+            return {'error': f'could not reach ASR worker: {e}'}
+        return self._read(timeout) or {'error': 'ASR worker gave no answer'}
+
+    def transcribe(self, audio_path, max_seconds=0, timeout=600):
+        """Transcript of a voice sample (see asr_worker.transcribe)."""
+        if not self.proc or self.proc.poll() is not None:
+            return {'error': 'ASR worker is not running'}
+        try:
+            self.proc.stdin.write(json.dumps(
+                {'transcribe': audio_path, 'max_seconds': max_seconds}) + '\n')
             self.proc.stdin.flush()
         except Exception as e:
             return {'error': f'could not reach ASR worker: {e}'}

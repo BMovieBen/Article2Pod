@@ -1,5 +1,5 @@
 {
-  "_readme": "This is a sample ComfyUI API-format workflow for Article2Pod using VibeVoice. Replace this file with your own VibeVoice Single Speaker workflow exported from ComfyUI via Settings > Dev Mode > Save (API Format). Your workflow must contain a LoadAudio node, a LoadTextFromFileNode, and a SaveAudioMP3 node. Article2Pod will locate these automatically by class type regardless of node ID. See https://github.com/Enemyx-net/VibeVoice-ComfyUI for more information about the VibeVoice-ComfyUI nodes and usage.",
+  "_readme": "This is a sample ComfyUI API-format workflow for Article2Pod using VibeVoice. Copy it to workflow-api.json to use VibeVoice (Article2Pod picks the TTS engine from the nodes in that file), or replace it with your own VibeVoice Single Speaker workflow exported from ComfyUI via Settings > Dev Mode > Save (API Format). Your workflow must contain a LoadAudio node, a LoadTextFromFileNode, and a SaveAudioMP3 node. Article2Pod will locate these automatically by class type regardless of node ID. See https://github.com/Enemyx-net/VibeVoice-ComfyUI for more information about the VibeVoice-ComfyUI nodes and usage.",
 
   "1": {
     "inputs": {
