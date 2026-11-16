@@ -2,7 +2,8 @@
 config.json
 
 # User workflow
-workflow/workflow-api.json
+workflow/workflow-api.vibevoice.json
+workflow/workflow-api.breeze.json
 workflow/cleanup-workflow-api.json
 
 # Working files

@@ -12,7 +12,7 @@
 # and if it fails the quotation-mark heuristic is used instead.
 
 import re, json, time
-from utils import BREEZE_GENRES
+from utils import get_breeze_genres
 
 PAUSE_RE   = re.compile(r'\s*\[pause:(\d+)\]\s*$')
 SENT_SPLIT = re.compile(r'(?<=[.!?”"\'’])\s+(?=[A-Z0-9“"‘(])')
@@ -142,35 +142,31 @@ def mark_quotes_heuristic(sentences, min_frac=0.6, min_quoted_words=6):
 # ------------------------------------------------------------
 # LLM: genre + quoted speech
 # ------------------------------------------------------------
-GENRE_HELP = {
-    'news':          'straight reporting of events, written in a neutral third-person voice',
-    'opinion':       "columns, op-eds, blogs and commentary in the writer's own voice, with strong views, "
-                     'sarcasm or humour (for example political columnists)',
-    'entertainment': 'film, TV, music, celebrities, culture and reviews of them',
-    'tech_gaming':   'technology, gadgets, software, video games and hardware news or reviews',
-    'feature':       'long-form storytelling, profiles and in-depth magazine pieces',
-    'humor':         'satire and comedy writing',
-    'interview':     'a question-and-answer interview or transcript',
-}
-
-SYSTEM_PROMPT = (
-    'You prepare articles to be read aloud by a single narrator. You are shown the article\'s '
-    'metadata and its sentences, numbered. Answer two questions.\n\n'
-    '1. GENRE: pick exactly one of: ' + ', '.join(BREEZE_GENRES) + '.\n' +
-    '\n'.join(f'   - {g}: {h}' for g, h in GENRE_HELP.items()) + '\n'
-    '   When the article is about technology, games, film, TV, music or culture, choose tech_gaming or '
-    'entertainment even if it is written as a news report. Use news for politics, business, world and '
-    'other general reporting.\n\n'
-    '2. QUOTES: list the numbers of sentences that are mainly a direct quotation of words someone '
-    'said or wrote (a statement, testimony, a post, a letter, a passage from another publication). '
-    'Include every sentence of a quotation that runs over several sentences. Do NOT include sentences '
-    'that are the writer\'s own words containing a short quoted phrase, a nickname, a title or scare '
-    'quotes. Sentences marked [BLOCK QUOTE] are already quotes; you do not need to list them.\n\n'
-    'Also give 1 or 2 words for the writer\'s tone (for example: neutral, sardonic, outraged, playful, '
-    'wistful, enthusiastic).\n\n'
-    'Reply with ONLY a JSON object, no commentary:\n'
-    '{"genre": "...", "tone": ["..."], "quotes": [sentence numbers]}'
-)
+def build_system_prompt(genres):
+    """The text model's instructions. The genre list and descriptions come
+    from config.json ("breeze" -> "genres" -> <name> -> "description");
+    with no genres only the quotes are asked for."""
+    if genres:
+        genre_part = ('1. GENRE: pick exactly one of: ' + ', '.join(genres) + '.\n' +
+                      ''.join(f'   - {g}: {v["description"]}\n' if v.get('description') else f'   - {g}\n'
+                              for g, v in genres.items()) + '\n')
+        ask, qnum = 'Answer two questions.', '2'
+        reply = '{"genre": "...", "tone": ["..."], "quotes": [sentence numbers]}'
+    else:
+        genre_part, ask, qnum = '', 'Answer this question.', '1'
+        reply = '{"tone": ["..."], "quotes": [sentence numbers]}'
+    return (
+        'You prepare articles to be read aloud by a single narrator. You are shown the article\'s '
+        'metadata and its sentences, numbered. ' + ask + '\n\n' + genre_part +
+        qnum + '. QUOTES: list the numbers of sentences that are mainly a direct quotation of words someone '
+        'said or wrote (a statement, testimony, a post, a letter, a passage from another publication). '
+        'Include every sentence of a quotation that runs over several sentences. Do NOT include sentences '
+        'that are the writer\'s own words containing a short quoted phrase, a nickname, a title or scare '
+        'quotes. Sentences marked [BLOCK QUOTE] are already quotes; you do not need to list them.\n\n'
+        'Also give 1 or 2 words for the writer\'s tone (for example: neutral, sardonic, outraged, playful, '
+        'wistful, enthusiastic).\n\n'
+        'Reply with ONLY a JSON object, no commentary:\n' + reply
+    )
 
 
 def build_prompt(meta, sentences, first, last):
@@ -198,7 +194,8 @@ def analyze(meta, sentences, cfg, genre_pinned=None, window=90):
     info = {'genre': genre_pinned, 'tone': [], 'quote_method': 'marks',
             'genre_method': 'site' if genre_pinned else 'default', 'llm_seconds': 0.0,
             'errors': []}
-    want_genre  = not genre_pinned and cfg.get('genre_mode', 'llm') == 'llm'
+    genres      = get_breeze_genres(cfg)
+    want_genre  = bool(genres) and not genre_pinned and cfg.get('genre_mode', 'llm') == 'llm'
     want_quotes = cfg.get('quote_mode', 'llm') == 'llm'
     if cfg.get('quote_mode') == 'off':
         for s in sentences:
@@ -214,14 +211,15 @@ def analyze(meta, sentences, cfg, genre_pinned=None, window=90):
     starts = list(range(0, len(sentences), window)) if want_quotes else [0]
     for first in starts:
         last  = min(len(sentences), first + window)
-        reply, err = run_llm(llm_cfg, build_prompt(meta, sentences, first, last), SYSTEM_PROMPT)
+        reply, err = run_llm(llm_cfg, build_prompt(meta, sentences, first, last),
+                             build_system_prompt(genres if want_genre else {}))
         data  = parse_llm_json(reply) if reply else None
         if not data:
             info['errors'].append(err or 'reply was not valid JSON')
             continue
         ok_windows += 1
         g = str(data.get('genre') or '').strip().lower().replace('/', '_').replace(' ', '_')
-        if want_genre and info['genre'] is None and g in BREEZE_GENRES:
+        if want_genre and info['genre'] is None and g in genres:
             info['genre'], info['genre_method'] = g, 'llm'
             tone = data.get('tone') or []
             info['tone'] = [str(t)[:20] for t in (tone if isinstance(tone, list) else [tone])][:2]

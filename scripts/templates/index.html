@@ -742,11 +742,27 @@
     color: var(--accent);
   }
 
+  .engine-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 0 6px;
+    border-radius: 8px;
+    font-size: 10px;
+    line-height: 16px;
+    vertical-align: 1px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
+  .engine-badge.engine-breeze    { color: var(--accent);  border-color: var(--accent); }
+  .engine-badge.engine-vibevoice { color: var(--accent2); border-color: var(--accent2); }
+  .card-engine-wrap { display: flex; align-items: center; gap: 10px; }
+
   /* Card voice panel */
   .card-voice-panel {
     border-top: 1px solid var(--border);
     padding: 10px 12px;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 10px;
     background: var(--surface2);
@@ -937,6 +953,12 @@
     <button class="btn-save" id="saveDefaultVoice"
             onclick="saveDefaultVoice()" disabled>Save</button>
   </div>
+  <div class="settings-row" id="defaultEngineRow" style="margin-top:12px;display:none;">
+    <span class="settings-label">Default Engine</span>
+    <select id="defaultEngineSelect" onchange="defaultEngineChanged()"></select>
+    <button class="btn-save" id="saveDefaultEngine"
+            onclick="saveDefaultEngine()" disabled>Save</button>
+  </div>
   <div class="settings-row" style="margin-top:12px;">
     <span class="settings-label">ComfyUI</span>
     <span id="comfyStatusText" style="font-size:12px;color:var(--muted);flex:1;">Checking...</span>
@@ -1042,6 +1064,8 @@
   let voicesCache     = null;   // cached voice list
   let voicePanelOpenCount = 0;
   let defaultVoice    = '';     // current default from config
+  let enginesCache    = [];     // [{id, label}] engines whose workflow exists
+  let defaultEngine   = '';     // engine used when nothing else picks one
   let pendingDefault  = '';     // staged but unsaved default change
   const voicePanelOpen = {};    // slug -> bool
   const editOriginal = {};      // slug -> {title, artist, album} snapshot for dirty-check on close
@@ -1310,6 +1334,8 @@
       voicesCache  = data.voices || [];
       defaultVoice = data.default || '';
       pendingDefault = defaultVoice;
+      enginesCache  = data.engines || [];
+      defaultEngine = data.default_engine || '';
       return voicesCache;
     } catch (e) {
       return [];
@@ -1331,6 +1357,14 @@
       ).join('');
       document.getElementById('saveDefaultVoice').disabled = true;
       pendingDefault = defaultVoice;
+
+      // Engine choice only matters when both workflows are installed
+      const engineRow = document.getElementById('defaultEngineRow');
+      engineRow.style.display = enginesCache.length > 1 ? '' : 'none';
+      document.getElementById('defaultEngineSelect').innerHTML = enginesCache.map(e =>
+        `<option value="${escHtml(e.id)}" ${e.id === defaultEngine ? 'selected' : ''}>${escHtml(e.label)}</option>`
+      ).join('');
+      document.getElementById('saveDefaultEngine').disabled = true;
 
       pollComfyStatus();  // starts a self-terminating poll loop while the panel is open
     }
@@ -1359,6 +1393,67 @@
       setTimeout(() => { btn.textContent = 'Save'; }, 1500);
     } else {
       showError('Could not save default voice.');
+    }
+  }
+
+  function defaultEngineChanged() {
+    document.getElementById('saveDefaultEngine').disabled =
+      (document.getElementById('defaultEngineSelect').value === defaultEngine);
+  }
+
+  async function saveDefaultEngine() {
+    const engine = document.getElementById('defaultEngineSelect').value;
+    const btn    = document.getElementById('saveDefaultEngine');
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({tts_engine: engine}),
+    });
+    if (res.ok) {
+      defaultEngine = engine;
+      voicesCache   = null;  // refresh the "Default (...)" labels next time
+      btn.disabled  = true;
+      btn.textContent = 'Saved!';
+      setTimeout(() => { btn.textContent = 'Save'; }, 1500);
+      pollQueue();
+    } else {
+      showError('Could not save default engine.');
+    }
+  }
+
+  function engineLabel(id) {
+    if (id === 'auto') return 'Auto';
+    const e = (enginesCache || []).find(x => x.id === id);
+    return e ? e.label : (id === 'breeze' ? 'Breeze' : id === 'vibevoice' ? 'VibeVoice' : id);
+  }
+
+  async function populateEngineSelect(selectId, currentEngine) {
+    const sel = document.getElementById(selectId);
+    if (!sel) return;
+    await loadVoices();
+    const opts = [`<option value="">Default (${escHtml(engineLabel(defaultEngine))})</option>`];
+    enginesCache.forEach(e => {
+      opts.push(`<option value="${escHtml(e.id)}" ${e.id === currentEngine ? 'selected' : ''}>${escHtml(e.label)}</option>`);
+    });
+    sel.innerHTML = opts.join('');
+    sel.value = currentEngine || '';
+    const wrap = document.getElementById(selectId + '-wrap');
+    if (wrap) wrap.style.display = enginesCache.length > 1 ? '' : 'none';
+  }
+
+  async function setCardEngine(slug, engine) {
+    try {
+      const res = await fetch('/api/queue/engine', {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({slug, engine}),
+      });
+      if (!res.ok) { showError('Could not update engine.'); return; }
+      const voiceSel = document.getElementById(`voice-select-${slug}`);
+      const gear     = document.getElementById(`gear-${slug}`);
+      if (gear) gear.classList.toggle('customized', !!engine || !!(voiceSel && voiceSel.value));
+    } catch (e) {
+      showError('Could not update engine.');
     }
   }
 
@@ -1514,6 +1609,7 @@
         const item = (data.queue || []).find(i => i.slug === slug);
         if (item) {
           await populateVoiceSelect(`voice-select-${slug}`, item.voice || '');
+          await populateEngineSelect(`engine-select-${slug}`, item.engine || '');
 
           editOriginal[slug] = {
             title:  item.title  || '',
@@ -1599,7 +1695,8 @@
       // Update gear color based on whether voice differs from default
       const gear = document.getElementById(`gear-${slug}`);
       if (gear) {
-        if (voice && voice !== '') {
+        const engineSel = document.getElementById(`engine-select-${slug}`);
+        if ((voice && voice !== '') || (engineSel && engineSel.value)) {
           gear.classList.add('customized');
         } else {
           gear.classList.remove('customized');
@@ -2005,7 +2102,7 @@ async function startGenerate() {
         const artHtml = artCellHtml(item.slug, item.album_art_b64, isArtEditable);
 
         // Gear is accent-colored if item has a custom voice set
-        const gearClass = item.voice ? 'btn-gear customized' : 'btn-gear';
+        const gearClass = (item.voice || item.engine) ? 'btn-gear customized' : 'btn-gear';
 
         let actionHtml = '';
         if (item.status === 'processing') {
@@ -2035,7 +2132,7 @@ async function startGenerate() {
               title="${escHtml(item.error || '')}">&#10005;</span>`;
         } else if (item.status === 'pending') {
           const pipelineType = item.pipeline_type || 'comfyui';
-          const gearClass    = item.voice ? 'btn-gear customized' : 'btn-gear';
+          const gearClass    = (item.voice || item.engine) ? 'btn-gear customized' : 'btn-gear';
 
           // Gear toggles the metadata edit fields for every pipeline;
           // the voice dropdown inside it only exists for text articles.
@@ -2088,6 +2185,15 @@ async function startGenerate() {
                     onchange="setCardVoice('${escHtml(escJs(item.slug))}', this.value)">
               <option value="">Loading...</option>
             </select>
+            <span id="engine-select-${escHtml(item.slug)}-wrap" class="card-engine-wrap" style="display:none;">
+              <span class="settings-label" style="white-space:nowrap;">
+                <i class="fa-solid fa-wave-square" style="margin-right:4px;"></i>Engine
+              </span>
+              <select id="engine-select-${escHtml(item.slug)}"
+                      onchange="setCardEngine('${escHtml(escJs(item.slug))}', this.value)">
+                <option value="">Loading...</option>
+              </select>
+            </span>
           </div>` : '';
 
         // Metadata edit fields — hidden by default, shown via the same
@@ -2119,6 +2225,8 @@ async function startGenerate() {
               <div class="card-title" id="title-display-${escHtml(item.slug)}">${escHtml(item.title || item.slug)}</div>
               <div class="card-meta" id="meta-display-${escHtml(item.slug)}">
                 ${escHtml(item.album || '')}${item.album && item.artist ? ' &middot; ' : ''}${escHtml(item.artist || '')}
+                ${item.engine_badge ? `<span class="engine-badge engine-${escHtml(item.engine_badge)}"
+                    title="${item.engine_used ? 'Read with' : 'Will be read with'} ${escHtml(engineLabel(item.engine_badge))}${item.voice_used ? ' (' + escHtml(item.voice_used) + ')' : ''}">${escHtml(engineLabel(item.engine_badge))}</span>` : ''}
               </div>
               ${editFields}
               ${outputToggle ? `<div style="margin-top:4px">${outputToggle}</div>` : ''}
@@ -2146,6 +2254,7 @@ async function startGenerate() {
               `voice-select-${item.slug}`,
               item.voice || ''
             );
+            populateEngineSelect(`engine-select-${item.slug}`, item.engine || '');
           }
 
           const titleDisplay = document.getElementById(`title-display-${item.slug}`);

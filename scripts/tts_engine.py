@@ -1,11 +1,9 @@
 # tts_engine.py
 #
-# Article2Pod supports one TTS engine at a time, chosen by what is in the
-# audio workflow (config "workflow_file", normally workflow/workflow-api.json):
-#   - VibeVoice nodes      -> the original VibeVoice path
-#   - Breeze TTS 2 nodes   -> the Breeze path (breeze_audio.py)
-# To switch, copy workflow/workflow-api.vibevoice.sample.json or
-# workflow/workflow-api.breeze.sample.json over workflow-api.json.
+# Each TTS engine has its own audio workflow (config "workflow_file_vibevoice"
+# / "workflow_file_breeze"); which one a job uses is decided by
+# utils.resolve_engine. detect_engine() checks that a workflow really
+# contains that engine's nodes.
 
 import json
 

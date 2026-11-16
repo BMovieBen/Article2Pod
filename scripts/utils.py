@@ -1,7 +1,7 @@
 # utils.py
 # Shared utilities for the Article to Podcast pipeline
 
-import re, json, os, csv, datetime
+import re, json, os, csv, datetime, glob, random
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from readability import Document
@@ -104,7 +104,10 @@ CONFIG_DEFAULTS = {
     'audio_folder':            lambda: os.path.join(get_config_value('output_folder'),
                                                     os.path.dirname(get_config_value('audio_output_prefix')) or ''),
     'audio_output_prefix':     'audio/podcast',
-    'workflow_file':           os.path.join('workflow', 'workflow-api.json'),
+    'workflow_file_vibevoice': os.path.join('workflow', 'workflow-api.vibevoice.json'),
+    'workflow_file_breeze':    os.path.join('workflow', 'workflow-api.breeze.json'),
+    'tts_engine':              'vibevoice',   # used when both workflows exist and nothing else picks
+    'group_by_engine':         False,
     'art_workflow_file':       lambda: (os.path.join('workflow', 'art-workflow-api.json')
                                         if os.path.isfile(os.path.join(APP_DIR, 'workflow', 'art-workflow-api.json'))
                                         else None),
@@ -143,8 +146,6 @@ def get_comfy_listen_host():
     (see app.py). Set to '127.0.0.1' in config.json to restrict ComfyUI
     to this machine only."""
     return load_config().get('comfy_listen_host', '0.0.0.0')
-def get_workflow_file():
-    return os.path.join(APP_DIR, get_required('workflow_file'))
 def get_output_dir():
     return os.path.join(APP_DIR, 'output')
 def get_track_log():
@@ -188,50 +189,14 @@ AI_ART_PROMPT_DEFAULTS = {
 # ------------------------------------------------------------
 # Breeze TTS 2 (used only when the audio workflow contains Breeze nodes)
 # ------------------------------------------------------------
-# Voice directions tested by ear during the Breeze evaluation. Guidance
+# The genres, their voice directions and guidance live in config.json
+# ("breeze" -> "genres"); config.sample.json ships the tuned set. Guidance
 # (cfg) is how strongly a direction is applied: low keeps more of the
 # voice sample's own delivery; 1.0 ignores the direction entirely.
-BREEZE_ANCHOR = 'Confident, energetic news anchor delivery: loud, clear, brisk and authoritative.'
-BREEZE_GENRE_DEFAULTS = {
-    # tuned by ear
-    'opinion': {
-        'narrator': 'Lively, animated, cheeky British comic delivery with a brisk pace, '
-                    'sarcastic emphasis and lots of expression.',
-        'narrator_guidance': 1.25,
-        'quote': BREEZE_ANCHOR, 'quote_guidance': 2.5,
-        'quote_cue': '', 'quote_end_pause': 0.65,
-    },
-    'news': {
-        'narrator': BREEZE_ANCHOR, 'narrator_guidance': 2.5,
-        'quote': BREEZE_ANCHOR, 'quote_guidance': 2.5,
-        'quote_cue': 'Quote:', 'quote_end_pause': 1.0,
-    },
-    # starting points, not yet tuned by ear (guidance comes from the global default)
-    'entertainment': {
-        'narrator': 'Warm, upbeat and lightly playful conversational delivery with personality and a brisk pace.',
-        'quote': BREEZE_ANCHOR, 'quote_cue': '', 'quote_end_pause': 0.65,
-    },
-    'tech_gaming': {
-        'narrator': 'Enthusiastic, knowledgeable and conversational delivery, like a friendly expert host, '
-                    'with a brisk pace.',
-        'quote': BREEZE_ANCHOR, 'quote_cue': '', 'quote_end_pause': 0.65,
-    },
-    'feature': {
-        'narrator': 'Engaging, thoughtful storytelling delivery with natural variety in pace and emphasis.',
-        'quote': BREEZE_ANCHOR, 'quote_cue': '', 'quote_end_pause': 0.65,
-    },
-    'humor': {
-        'narrator': 'Playful, cheeky comic delivery with crisp timing and lots of expression.',
-        'quote': BREEZE_ANCHOR, 'quote_cue': '', 'quote_end_pause': 0.65,
-    },
-    'interview': {
-        'narrator': 'Curious, friendly and conversational delivery with a brisk pace.',
-        'quote': BREEZE_ANCHOR, 'quote_cue': '', 'quote_end_pause': 0.65,
-    },
-}
-BREEZE_GENRES = list(BREEZE_GENRE_DEFAULTS)
 BREEZE_DEFAULTS = {
-    'default_genre':      'news',   # used when classification is off or fails
+    'default_genre':      '',       # genre used when classification is off or fails
+    'narrator':           'Clear, natural, conversational delivery.',  # used when a genre sets none
+    'quote':              'Clear, natural, conversational delivery.',
     'guidance':           1.5,      # global narrator guidance for presets that don't set one
     'quote_guidance':     2.5,      # global quote guidance for presets that don't set one
     'temperature':        0.9,      # 0.9 = Breeze default; higher = more varied delivery
@@ -246,7 +211,7 @@ BREEZE_DEFAULTS = {
     'quote_mode':         'llm',    # llm | marks | off  (marks = quotation-mark heuristic only)
     'workflow_file':      'workflow/cleanup-workflow-api.json',   # text-model workflow for genre/quotes
     'timeout_seconds':    1800,     # includes time queued behind other ComfyUI jobs
-    'genres':             {},       # per-genre overrides, merged over the built-in presets
+    'genres':             {},       # genre name -> description + voice settings (see config.sample.json)
     'voices':             {},       # per-voice overrides, keyed by voice file name
 }
 
@@ -255,21 +220,103 @@ def get_breeze_config():
     cfg.update(load_config().get('breeze') or {})
     return cfg
 
+def get_breeze_genres(cfg=None):
+    """The genres from config.json ("breeze" -> "genres"), keyed by
+    lower-case name. Each value is a dict: an optional "description" for
+    the text model plus any of BREEZE_PRESET_KEYS."""
+    cfg = cfg or get_breeze_config()
+    return {str(k).strip().lower(): v for k, v in (cfg.get('genres') or {}).items()
+            if isinstance(v, dict)}
+
 BREEZE_PRESET_KEYS = ('narrator', 'narrator_guidance', 'quote', 'quote_guidance',
                       'quote_cue', 'quote_end_pause', 'temperature')
 
 def get_breeze_voice_settings(voice_file, cfg=None):
     """The "breeze" -> "voices" entry for one voice sample. Matched by file
-    name, ignoring case and the .mp3 extension ("JamesRolfe.mp3" or
-    "JamesRolfe")."""
+    name, ignoring case and the .mp3 extension ("YourVoice.mp3" or
+    "YourVoice")."""
     cfg = cfg or get_breeze_config()
-    if not voice_file:
+    return match_voice_entry(cfg.get('voices'), voice_file)
+
+def match_voice_entry(mapping, voice_file):
+    """The dict in mapping whose key names voice_file, matched by file
+    name, ignoring case and the .mp3 extension. {} when there is none."""
+    if not voice_file or not isinstance(mapping, dict):
         return {}
     want = os.path.splitext(os.path.basename(voice_file))[0].lower()
-    for name, settings in (cfg.get('voices') or {}).items():
+    for name, settings in mapping.items():
         if os.path.splitext(os.path.basename(name))[0].lower() == want and isinstance(settings, dict):
             return settings
     return {}
+
+# ------------------------------------------------------------
+# TTS engine choice
+#
+# Each engine has its own audio workflow file. An engine is available
+# when its file exists; with only one available, that one is always used.
+# Otherwise, first match wins: the engine picked on the queue card (or
+# set by the site's domain_overrides when the article was added), the
+# voice's engine (top-level "voices" -> <name> -> "engine"), then
+# "tts_engine".
+# ------------------------------------------------------------
+TTS_ENGINES   = ('vibevoice', 'breeze')
+ENGINE_LABELS = {'vibevoice': 'VibeVoice', 'breeze': 'Breeze'}
+
+def normalize_engine(name):
+    """'Breeze', 'breeze_tts', 'VibeVoice' -> engine id, else None."""
+    n = re.sub(r'[^a-z]', '', str(name or '').lower())
+    if n.startswith('breeze'):
+        return 'breeze'
+    if n.startswith('vibe'):
+        return 'vibevoice'
+    return None
+
+def get_engine_workflow_file(engine):
+    return os.path.join(APP_DIR, get_required(f'workflow_file_{engine}'))
+
+def get_available_engines():
+    return [e for e in TTS_ENGINES if os.path.isfile(get_engine_workflow_file(e))]
+
+def get_default_engine():
+    """tts_engine if its workflow exists, else the first available engine."""
+    available = get_available_engines()
+    want = normalize_engine(get_config_value('tts_engine'))
+    return want if want in available else (available[0] if available else None)
+
+def get_voice_engine(voice_file):
+    """The engine set for a voice in the top-level "voices" block, or None."""
+    return normalize_engine(match_voice_entry(load_config().get('voices'), voice_file).get('engine'))
+
+def resolve_engine(item_engine=None, voice_file=None):
+    """(engine, reason) for one job; engine is None when neither audio
+    workflow exists."""
+    available = get_available_engines()
+    if not available:
+        return None, 'no audio workflow'
+    if len(available) == 1:
+        return available[0], 'only workflow'
+    for engine, reason in ((normalize_engine(item_engine), 'picked'),
+                           (get_voice_engine(voice_file), 'voice')):
+        if engine in available:
+            return engine, reason
+    return get_default_engine(), 'default'
+
+def list_voice_files():
+    return sorted(os.path.basename(f) for f in glob.glob(os.path.join(get_voice_folder(), '*.mp3')))
+
+def resolve_voice(override=None):
+    """The voice file name a job will use: the override (the card's pick
+    or the site's voice), else voice_file, else the first sample.
+    "shuffle" picks one at random. None when there are no samples."""
+    voices = list_voice_files()
+    if not voices:
+        return None
+    for want in (override, load_config().get('voice_file')):
+        if want == 'shuffle':
+            return random.choice(voices)
+        if want and os.path.isfile(os.path.join(get_voice_folder(), want)):
+            return want
+    return voices[0]
 
 def get_breeze_preset(genre, site_override=None, cfg=None, voice_file=None):
     """Resolve the voice settings for one article. Precedence, most
@@ -277,17 +324,21 @@ def get_breeze_preset(genre, site_override=None, cfg=None, voice_file=None):
     genre > the voice's own settings > genre preset > global "breeze"
     values. Returns a dict with genre, narrator, quote, narrator_guidance,
     quote_guidance, temperature, quote_cue and quote_end_pause."""
-    cfg   = cfg or get_breeze_config()
-    genre = genre if genre in BREEZE_GENRE_DEFAULTS else cfg['default_genre']
+    cfg    = cfg or get_breeze_config()
+    genres = get_breeze_genres(cfg)
+    if genre not in genres:
+        genre = cfg['default_genre'] if cfg['default_genre'] in genres else ''
     preset = {
+        'narrator':          cfg['narrator'],
+        'quote':             cfg['quote'],
         'narrator_guidance': cfg['guidance'],
         'quote_guidance':    cfg['quote_guidance'],
         'temperature':       cfg['temperature'],
         'quote_cue':         '',
         'quote_end_pause':   cfg['switch_gap'],
     }
-    preset.update(BREEZE_GENRE_DEFAULTS.get(genre, {}))
-    preset.update((cfg.get('genres') or {}).get(genre, {}))
+    gset = genres.get(genre, {})
+    preset.update({k: v for k, v in gset.items() if k in BREEZE_PRESET_KEYS and v is not None})
     # per voice: "guidance" is shorthand for narrator_guidance in every genre
     voice = get_breeze_voice_settings(voice_file, cfg)
     for layer in (voice, (voice.get('genres') or {}).get(genre) or {}):
@@ -302,7 +353,7 @@ def get_breeze_preset(genre, site_override=None, cfg=None, voice_file=None):
                      ('breeze_quote_cue', 'quote_cue')):
         if site.get(src) is not None:
             preset[dst] = site[src]
-    preset['genre'] = genre
+    preset['genre'] = genre or 'none'
     return preset
 
 def _ai_section(name, defaults):
@@ -567,7 +618,10 @@ def get_generation_log_path():
     os.makedirs(log_dir, exist_ok=True)
     return os.path.join(log_dir, 'generation-log.csv')
 
-def log_generation(slug, word_count, voice_file, status, duration, detail=''):
+GENERATION_LOG_HEADER = ['timestamp', 'slug', 'word_count', 'voice',
+                         'status', 'duration_seconds', 'detail', 'engine']
+
+def log_generation(slug, word_count, voice_file, status, duration, detail='', engine=''):
     """Append one row per generation attempt (audio or art) to
     generation-log.csv. Shared by generate-audio.py and generate-art.py
     so both write to the same log instead of each keeping its own copy
@@ -576,15 +630,21 @@ def log_generation(slug, word_count, voice_file, status, duration, detail=''):
         return
     log_path = get_generation_log_path()
     is_new   = not os.path.isfile(log_path)
+    if not is_new:
+        # Logs from before the engine column: add it (blank) to old rows.
+        with open(log_path, 'r', newline='', encoding='utf-8') as f:
+            rows = list(csv.reader(f))
+        if rows and rows[0] != GENERATION_LOG_HEADER and rows[0] == GENERATION_LOG_HEADER[:-1]:
+            with open(log_path, 'w', newline='', encoding='utf-8') as f:
+                csv.writer(f).writerows([GENERATION_LOG_HEADER] + [r + [''] for r in rows[1:]])
     with open(log_path, 'a', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         if is_new:
-            writer.writerow(['timestamp', 'slug', 'word_count', 'voice',
-                             'status', 'duration_seconds', 'detail'])
+            writer.writerow(GENERATION_LOG_HEADER)
         writer.writerow([
             datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             slug, word_count, voice_file, status,
-            f'{duration:.1f}', detail,
+            f'{duration:.1f}', detail, engine,
         ])
     print(f'  Logged:   {status} in {duration:.1f}s -> {log_path}')
 

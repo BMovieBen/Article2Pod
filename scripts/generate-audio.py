@@ -3,7 +3,8 @@
 import os, sys, json, time, glob, shutil, datetime, csv, subprocess, re, random
 import requests
 from utils import (
-    load_config, get_comfy_url, get_workflow_file,
+    load_config, get_comfy_url, get_voice_folder, resolve_voice, resolve_engine,
+    get_engine_workflow_file, ENGINE_LABELS, log_generation as _log_generation,
     get_input_folder, get_audio_folder, get_temp_folder,
     get_audio_output_prefix, get_generation_logging_enabled,
     get_chunk_word_count, APP_DIR,
@@ -15,56 +16,25 @@ from ai_quality import ASRWorker
 from tts_engine import load_workflow_file, detect_engine, BREEZE
 
 COMFY_URL     = get_comfy_url()
-WORKFLOW_FILE = get_workflow_file()
+WORKFLOW_FILE = None   # set in main() from the job's engine
+ENGINE        = ''
 INPUT_FOLDER  = get_input_folder()
 AUDIO_FOLDER  = get_audio_folder()
 TEMP_FOLDER   = get_temp_folder()
 OUTPUT_PREFIX = get_audio_output_prefix()
 
-def pick_shuffle_voice(voice_folder):
-    """Randomly select one mp3 from voice_folder. Called once per article
-    (from get_voice_file, which is itself only called once in main()), so
-    a chunked article's chunks all reuse the same randomly-chosen voice."""
-    voices = glob.glob(os.path.join(voice_folder, '*.mp3'))
-    if not voices:
-        print(f'No voice clone MP3 found in {voice_folder}')
-        sys.exit(1)
-    chosen = random.choice(voices)
-    name   = os.path.basename(chosen)
-    print(f'  Shuffle:  randomly selected {name}')
-    return name, chosen
-
 def get_voice_file(override=None):
-    from utils import get_voice_folder
-    voice_folder = get_voice_folder()
-
-    # Use override if provided
-    if override:
-        if override == 'shuffle':
-            return pick_shuffle_voice(voice_folder)
-        full_path = os.path.join(voice_folder, override)
-        if os.path.isfile(full_path):
-            return override, full_path
-        print(f'  Voice override not found: {override}, falling back to default.')
-
-    config     = load_config()
-    voice_file = config.get('voice_file')
-    if voice_file == 'shuffle':
-        return pick_shuffle_voice(voice_folder)
-    if voice_file:
-        full_path = os.path.join(voice_folder, voice_file)
-        if os.path.isfile(full_path):
-            return voice_file, full_path
-
-    # Fallback: first mp3 in voice folder
-    voices = glob.glob(os.path.join(voice_folder, '*.mp3'))
-    if voices:
-        name = os.path.basename(voices[0])
-        print(f'  No voice_file in config, defaulting to: {name}')
-        return name, voices[0]
-
-    print(f'No voice clone MP3 found in {voice_folder}')
-    sys.exit(1)
+    """(name, full path) of the voice for this run. The pipeline passes a
+    concrete voice; "shuffle" or no override is resolved here (utils.resolve_voice)."""
+    name = resolve_voice(override)
+    if not name:
+        print(f'No voice clone MP3 found in {get_voice_folder()}')
+        sys.exit(1)
+    if (override or load_config().get('voice_file')) == 'shuffle':
+        print(f'  Shuffle:  randomly selected {name}')
+    elif override and name != override:
+        print(f'  Voice override not found: {override}, using {name}.')
+    return name, os.path.join(get_voice_folder(), name)
 
 def load_workflow():
     # drops non-node entries such as the samples' "_readme" note
@@ -76,7 +46,7 @@ def get_article_txt_from_workflow():
             return os.path.basename(node.get('inputs', {}).get('file', 'input/article.txt'))
     return 'article.txt'
 
-ARTICLE_TXT = get_article_txt_from_workflow()
+ARTICLE_TXT = 'article.txt'   # replaced in main() from the engine's workflow
 
 def patch_workflow(workflow, voice_file, voice_full_path,
                    text_file=None, filename_prefix=None, seed=None):
@@ -200,30 +170,9 @@ def split_text_into_chunks(text, target_words):
     rendered[-1] += pause_suffix
     return rendered
 
-def get_generation_log_path():
-    log_dir = os.path.join(APP_DIR, 'log')
-    os.makedirs(log_dir, exist_ok=True)
-    return os.path.join(log_dir, 'generation-log.csv')
-
 def log_generation(slug, word_count, voice_file, status, duration, detail=''):
-    """Append one row per generation attempt: word count, duration, and
-    outcome, so timeout thresholds can be worked out from real data.
-    No-ops if generation_logging_enabled is false in config.json."""
-    if not get_generation_logging_enabled():
-        return
-    log_path = get_generation_log_path()
-    is_new   = not os.path.isfile(log_path)
-    with open(log_path, 'a', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        if is_new:
-            writer.writerow(['timestamp', 'slug', 'word_count', 'voice',
-                             'status', 'duration_seconds', 'detail'])
-        writer.writerow([
-            datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            slug, word_count, voice_file, status,
-            f'{duration:.1f}', detail,
-        ])
-    print(f'  Logged:   {status} in {duration:.1f}s ({word_count} words) -> {log_path}')
+    """One generation-log.csv row (utils.log_generation) tagged with this run's engine."""
+    _log_generation(slug, word_count, voice_file, status, duration, detail, ENGINE)
 
 def normalize_audio_step(slug, mp3_path, word_count=0, voice_file=''):
     """No-op unless audio_normalize_enabled is set in config. Runs ffmpeg
@@ -558,8 +507,17 @@ def merge_chunks(chunk_paths, slug):
 
     return dest
 
-def main(slug, voice_override=None):
+def main(slug, voice_override=None, engine=None):
+    global WORKFLOW_FILE, ENGINE, ARTICLE_TXT
     voice_file, voice_full_path = get_voice_file(voice_override)
+    engine, reason = resolve_engine(engine, voice_file)
+    if engine is None:
+        print('  No audio workflow found. Copy workflow/workflow-api.vibevoice.sample.json to '
+              'workflow-api.vibevoice.json and/or workflow/workflow-api.breeze.sample.json to '
+              'workflow-api.breeze.json.')
+        sys.exit(1)
+    ENGINE, WORKFLOW_FILE = engine, get_engine_workflow_file(engine)
+    ARTICLE_TXT = get_article_txt_from_workflow()
     print(f'  Slug:     {slug}')
     print(f'  Voice:    {voice_file}')
 
@@ -572,16 +530,13 @@ def main(slug, voice_override=None):
 
     article_path = os.path.join(INPUT_FOLDER, ARTICLE_TXT)
 
-    # The TTS engine is whatever the audio workflow contains (tts_engine.py).
+    print(f'  Engine:   {ENGINE_LABELS[engine]} ({reason}, {os.path.basename(WORKFLOW_FILE)})')
     workflow = load_workflow()
-    engine   = detect_engine(workflow)
-    if engine is None:
-        print(f'  The audio workflow ({os.path.basename(WORKFLOW_FILE)}) has neither VibeVoice nor '
-              f'Breeze TTS 2 nodes. Copy workflow/workflow-api.vibevoice.sample.json or '
-              f'workflow/workflow-api.breeze.sample.json to workflow-api.json.')
+    if detect_engine(workflow) != engine:
+        print(f'  {os.path.basename(WORKFLOW_FILE)} has no {ENGINE_LABELS[engine]} nodes. Copy '
+              f'workflow/workflow-api.{engine}.sample.json over it.')
         sys.exit(1)
     if engine == BREEZE:
-        print('  Engine:   Breeze TTS 2')
         import breeze_audio
         start_time = time.time()
         status, detail, stats = breeze_audio.run(slug, workflow, voice_file,
@@ -701,5 +656,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('slug')
     parser.add_argument('--voice', default=None)
+    parser.add_argument('--engine', default=None, help='vibevoice or breeze')
     args = parser.parse_args()
-    main(args.slug, args.voice)
+    main(args.slug, args.voice, args.engine)

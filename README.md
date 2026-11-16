@@ -30,11 +30,11 @@ Tested on Windows 11, RTX 4070 Super 12GB, 32GB RAM, ComfyUI Desktop 0.8.26, Vib
    pip install -r requirements.txt
    ```
 2. Create `config.json`. Every setting is optional, and folders default to ComfyUI Desktop's standard locations, so `{}` works on a standard install. `config.sample.json` explains every setting and its default; copy over only the ones you want to change.
-3. Pick the voice engine by copying one sample workflow to `workflow\workflow-api.json`:
-   - `workflow-api.vibevoice.sample.json` for VibeVoice. Your own export works too; it needs a `LoadAudio`, `LoadTextFromFileNode` and `SaveAudioMP3` node.
-   - `workflow-api.breeze.sample.json` for Breeze TTS 2. It needs a `LoadAudio`, `BreezeTTS2VoiceDirection` and `SaveAudio` node.
+3. Set up one or both voice engines by copying their sample workflow in `workflow\`:
+   - `workflow-api.vibevoice.sample.json` to `workflow-api.vibevoice.json` for VibeVoice. Your own export works too; it needs a `LoadAudio`, `LoadTextFromFileNode` and `SaveAudioMP3` node.
+   - `workflow-api.breeze.sample.json` to `workflow-api.breeze.json` for Breeze TTS 2. It needs a `LoadAudio`, `BreezeTTS2VoiceDirection` and `SaveAudio` node.
 
-   Article2Pod looks at the nodes in that file to decide which engine to use. Switching engines is just swapping the file.
+   With only one of them, every article uses it. With both, you pick per article (see [Voice engines](#voice-engines)).
 4. Drop voice sample MP3s in `voices\` (20-30 seconds of clean speech). Only use voices you have permission to use. [Common Voice](https://commonvoice.mozilla.org) and [LibriVox](https://librivox.org) are good free sources.
 5. Optional: put a `default_art.jpg` in the root for fallback album art.
 
@@ -49,6 +49,19 @@ Run `article2pod.bat`. The page opens at `http://localhost:8080`.
 
 Finished files land in `output\[Site]\[Author]\`.
 
+## Voice engines
+
+With both workflows installed, VibeVoice and Breeze jobs can share one queue. Which engine an article uses, first match wins:
+
+1. The engine picked in the card's gear.
+2. The site's `engine` in `domain_overrides` (set when the article is added; the card can change it).
+3. The voice's engine, from the top-level `voices` block in `config.json`, e.g. `"voices": { "YourVoice.mp3": { "engine": "vibevoice" } }`. With shuffle this is decided once the voice is picked.
+4. The default engine (`tts_engine`), which the top-right gear also sets.
+
+Each card shows a small badge with the engine it will use (Auto when a shuffled voice decides) and, once done, the one it used. `log\generation-log.csv` has an engine column.
+
+When the engine changes between two jobs, Article2Pod frees ComfyUI's memory first so both models aren't loaded at once, but only when ComfyUI has no other jobs queued. Set `"group_by_engine": true` to run all queued articles for the loaded engine before switching, instead of strict queue order.
+
 ## Breeze TTS 2
 
 An alternative to VibeVoice with more natural intonation. It reads each article in short pieces with a voice direction that suits the article, so a news story gets a news-anchor read and a column keeps the voice sample's personality.
@@ -57,18 +70,18 @@ An alternative to VibeVoice with more natural intonation. It reads each article 
 
 1. Install the [ComfyUI-Breeze-TTS-2](https://github.com/saganaki22/ComfyUI-Breeze-TTS-2) nodes. The model (int8 hybrid, about 5 GB) downloads on first use into `ComfyUI/models/breezetts2/`.
    - On ComfyUI 0.44 or later, version 1.4.7 of the nodes fails with `'_ComfyLinear' object has no attribute '_combined_linear'`. Until it is merged, apply the 4-line fix from [PR #15](https://github.com/saganaki22/ComfyUI-Breeze-TTS-2/pull/15).
-2. Copy `workflow\workflow-api.breeze.sample.json` to `workflow\workflow-api.json`.
+2. Copy `workflow\workflow-api.breeze.sample.json` to `workflow\workflow-api.breeze.json`.
 3. Set `ai_quality_check.asr_model_dir` to a Whisper model, even if the quality check itself is off. Breeze needs an exact transcript of each voice sample, and Article2Pod makes one the first time a voice is used (`voices\<name>.txt`; edit it if Whisper misheard something). Samples over 60 seconds are trimmed at a sentence end (`voices\<name>.breeze.wav`).
 4. The genre and quote detection use the same text-model workflow as `ai_cleanup` (`workflow\cleanup-workflow-api.json`, or the sample if you have none), whether or not cleanup itself is on. Set `breeze.genre_mode` and `breeze.quote_mode` to `"off"` / `"marks"` to skip the text model.
 
 **How an article is read**
 
-- The text model picks a genre (opinion, news, entertainment, tech_gaming, feature, humor, interview) and the sentences that are quoted speech. It only returns labels and never rewrites text. Its quote picks are checked against the actual quotation marks, and indented block quotes always count as quotes.
+- The text model picks a genre from `breeze.genres` in `config.json` (the sample ships opinion, news, entertainment, tech_gaming, feature, humor and interview; add or change them freely) and the sentences that are quoted speech. It only returns labels and never rewrites text. Its quote picks are checked against the actual quotation marks, and indented block quotes always count as quotes.
 - Each genre has a narrator direction, a quote direction and a guidance value for each. Guidance is how strongly the direction is applied: low keeps the voice sample's own personality, high follows the direction more closely.
   - **opinion:** lively narration at guidance 1.25, quotes in a news-anchor voice.
   - **news:** news-anchor voice throughout; quotes are introduced with a spoken "Quote:" and followed by a short pause.
   - The other genres have starting-point directions that have not been tuned by ear yet.
-- Change any of it in the `breeze` block of `config.json`, per voice in `breeze.voices` (for a voice the defaults don't suit, overall or for one genre), or per site in `domain_overrides` (for example pin `esquire.com` to `"genre": "opinion"`).
+- The genres and their directions live only in `config.json`; with no genres every article gets one plain direction. Change any of it in the `breeze` block of `config.json`, per voice in `breeze.voices` (for a voice the defaults don't suit, overall or for one genre), or per site in `domain_overrides` (for example pin `esquire.com` to `"genre": "opinion"`).
 - What was decided for each article is written to `temp\<slug>.breeze.json` and `log\breeze-articles.csv`.
 
 Breeze model weights are licensed for research and non-commercial use only.

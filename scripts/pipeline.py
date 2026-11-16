@@ -8,7 +8,8 @@ from utils import (
     get_input_folder, get_audio_folder, build_extra_model_paths_yaml,
     get_comfyui_console_log_path, free_comfyui_memory, get_required,
     set_stop_flag, clear_stop_flag, get_registered_comfy_prompts,
-    clear_comfy_prompt_registry, get_ai_cleanup_config
+    clear_comfy_prompt_registry, get_ai_cleanup_config,
+    resolve_voice, resolve_engine, get_config_value, ENGINE_LABELS
 )
 from queue_manager import queue_lock, load_queue, save_queue, delete_temp_files
 
@@ -20,6 +21,8 @@ current_slug          = None
 current_pipeline_type = None   # pipeline_type of the in-flight item, set by process_queue
 comfy_interrupt_error = None   # set if /interrupt fails, surfaced to the UI
 cancelled_by_user     = False  # set by request_stop() when it interrupts a comfyui job
+last_engine           = None   # TTS engine of the previous job in this run
+_job_plans            = {}     # slug -> (item voice, item engine, voice, engine) for this run
 
 # A stop flag or prompt registry left behind by a crashed/killed previous
 # run would block or confuse the next one, so start clean.
@@ -284,6 +287,64 @@ def sync_queue_metadata_from_sidecar(slug):
             item['album']  = meta.get('album', item.get('album'))
             save_queue(q)
 
+def is_tts_job(item):
+    """Text articles are read by a TTS engine; YouTube / embedded audio
+    are downloaded instead."""
+    temp = get_temp_folder()
+    return ((item.get('pipeline_type') or 'comfyui') == 'comfyui' and
+            not os.path.isfile(os.path.join(temp, f'audio-handoff-{item["slug"]}.json')) and
+            not os.path.isfile(os.path.join(temp, f'youtube-handoff-{item["slug"]}.json')))
+
+def plan_job(item):
+    """(voice, engine) a text article will use. Shuffle is resolved here,
+    once per run, so grouping by engine and the actual job agree. Changing
+    the card's voice or engine makes a new plan."""
+    key  = (item.get('voice'), item.get('engine'))
+    plan = _job_plans.get(item['slug'])
+    if not plan or plan[:2] != key:
+        voice = resolve_voice(item.get('voice'))
+        engine, _ = resolve_engine(item.get('engine'), voice)
+        plan = key + (voice, engine)
+        _job_plans[item['slug']] = plan
+    return plan[2], plan[3]
+
+def pick_next(pending):
+    """Next item to run: queue order, except that with group_by_engine the
+    first text article on the engine already loaded (or a download, which
+    needs no engine) goes ahead of articles for the other engine."""
+    if pending[0]['status'] == 'processing' or not last_engine or not get_config_value('group_by_engine'):
+        return pending[0]
+    for item in pending:
+        if not is_tts_job(item) or plan_job(item)[1] == last_engine:
+            if item is not pending[0]:
+                print(f'[Article2Pod] group_by_engine: {item["slug"]} goes first '
+                      f'({ENGINE_LABELS.get(last_engine, last_engine)} is loaded).')
+            return item
+    return pending[0]
+
+def comfy_queue_empty():
+    """True when ComfyUI has nothing running or queued (ours or anyone's)."""
+    try:
+        q = requests.get(f'{get_comfy_url()}/queue', timeout=5).json()
+        return not q.get('queue_running') and not q.get('queue_pending')
+    except Exception:
+        return False
+
+def switch_engine(engine):
+    """Unload the previous engine's model before the other engine runs, so
+    both are not in VRAM together. Skipped while other ComfyUI jobs are
+    running or queued, so a shared ComfyUI is never disturbed."""
+    global last_engine
+    if last_engine and engine != last_engine:
+        if comfy_queue_empty():
+            print(f'[Article2Pod] Switching from {ENGINE_LABELS.get(last_engine, last_engine)} to '
+                  f'{ENGINE_LABELS.get(engine, engine)}: freeing ComfyUI memory...')
+            free_comfyui_memory()
+        else:
+            print('[Article2Pod] Switching engine, but ComfyUI is busy with other jobs: '
+                  'not freeing memory.')
+    last_engine = engine
+
 def process_single(slug):
     temp      = get_temp_folder()
     input_dir = get_input_folder()
@@ -328,18 +389,27 @@ def process_single(slug):
 
         shutil.copy2(slug_txt, article_txt)
 
-        # Get voice override for this slug from queue
-        from queue_manager import load_queue
+        # Voice and engine for this article (card pick > site > voice > default)
         queue = load_queue()
         item  = next((i for i in queue if i['slug'] == slug), None)
-        voice = item.get('voice') if item else None
+        voice, engine = plan_job(item) if item else (resolve_voice(None), None)
+        if not voice:
+            return False, 'No voice sample MP3 found in the voices folder.'
+        if not engine:
+            return False, ('No audio workflow found: copy workflow-api.vibevoice.sample.json to '
+                           'workflow-api.vibevoice.json or workflow-api.breeze.sample.json to '
+                           'workflow-api.breeze.json in the workflow folder.')
+        switch_engine(engine)
 
-        gen_args = ['generate-audio.py', slug]
-        if voice:
-            gen_args += ['--voice', voice]
-        ok, out, _ = run_script(*gen_args)
+        ok, out, _ = run_script('generate-audio.py', slug, '--voice', voice, '--engine', engine)
         if not ok:
             return False, f'generate-audio failed:\n{out}'
+        with queue_lock:
+            q  = load_queue()
+            qi = next((i for i in q if i['slug'] == slug), None)
+            if qi:
+                qi['voice_used'], qi['engine_used'] = voice, engine
+                save_queue(q)
 
         # Optional ComfyUI-generated album art. Best-effort -- failure
         # here never fails the item; the fallback art fetch-metadata
@@ -368,6 +438,9 @@ def process_single(slug):
 
 def process_queue():
     global processing, stop_requested, current_slug, current_pipeline_type, comfy_interrupt_error, cancelled_by_user
+    global last_engine
+    last_engine = None
+    _job_plans.clear()
     temp  = get_temp_folder()
     queue = load_queue()
 
@@ -424,7 +497,7 @@ def process_queue():
                 pending = [i for i in q if i['status'] in ('pending', 'processing')]
                 if not pending:
                     break
-                item = pending[0]
+                item = pick_next(pending)
                 if item['status'] != 'processing':
                     item['status'] = 'processing'
                     save_queue(q)

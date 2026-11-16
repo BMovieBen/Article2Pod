@@ -8,7 +8,7 @@ from utils import (
     safe_slug, clean_author, get_temp_folder, get_input_folder,
     apply_strip_lines, apply_phonetic_replacements, is_clipboard_domain, is_youtube_url,
     fetch_and_resize_image, JUNK_PATTERNS, READING_TIME_RE, parse_reader_mode,
-    sanitize_filename, get_domain_override
+    sanitize_filename, get_domain_override, normalize_engine
 )
 from queue_manager import queue_lock, load_queue, save_queue
 
@@ -207,6 +207,7 @@ def finish_add(slug, url, mode, fetch_output):
     # key off of. get_domain_override() tries both.
     domain_override = get_domain_override(url, meta.get('album', ''))
     voice_override   = domain_override.get('voice_file') if domain_override else None
+    engine_override  = normalize_engine((domain_override or {}).get('engine'))
 
     art_b64 = None
     art     = meta.get('album_art')
@@ -233,6 +234,7 @@ def finish_add(slug, url, mode, fetch_output):
         'added_at':      time.time(),
         'pipeline_type':        pipeline_type,
         'voice':                voice_override,
+        'engine':               engine_override,
         'art_pending_comfyui':  meta.get('art_pending_comfyui', False),
         'fetch_output':         (fetch_output + '\n' + meta_out).strip(),
     }

@@ -10,8 +10,11 @@ sys.path.insert(0, SCRIPTS_DIR)
 
 from utils import (
     load_config, get_temp_folder, get_input_folder,
-    is_clipboard_domain, is_youtube_url, sanitize_filename
+    is_clipboard_domain, is_youtube_url, sanitize_filename,
+    get_available_engines, get_default_engine, resolve_engine, normalize_engine,
+    match_voice_entry, ENGINE_LABELS
 )
+import pipeline
 from queue_manager import (
     queue_lock, load_queue, save_queue, get_queue_item,
     delete_temp_files, cleanup_on_startup, cleanup_orphaned_audio
@@ -53,14 +56,36 @@ logging.getLogger('werkzeug').addFilter(SuppressPollingFilter())
 def index():
     return render_template('index.html')
 
+def engine_badge(item, available, cfg):
+    """Engine shown on a queue card: the one used once done, else the one
+    it will use. "auto" when a shuffled voice decides it."""
+    if (item.get('pipeline_type') or 'comfyui') != 'comfyui' or not available:
+        return None
+    if item.get('engine_used'):
+        return item['engine_used']
+    plan = pipeline._job_plans.get(item['slug'])
+    if plan and plan[:2] == (item.get('voice'), item.get('engine')):
+        return plan[3]
+    voice = item.get('voice') or cfg.get('voice_file')
+    if voice == 'shuffle':
+        if (len(available) > 1 and not normalize_engine(item.get('engine')) and
+                any(isinstance(v, dict) and normalize_engine(v.get('engine'))
+                    for v in (cfg.get('voices') or {}).values())):
+            return 'auto'
+        voice = None
+    return resolve_engine(item.get('engine'), voice)[0]
+
 @app.route('/api/queue', methods=['GET'])
 def api_queue():
     queue  = load_queue()
     state  = get_state()
     queue  = sorted(queue, key=lambda i: i.get('added_at', 0), reverse=True)
+    cfg       = load_config()
+    available = get_available_engines()
     result = []
     for item in queue:
         entry = dict(item)
+        entry['engine_badge'] = engine_badge(item, available, cfg)
         art   = item.get('album_art')
         if art and os.path.isfile(art):
             with open(art, 'rb') as f:
@@ -350,33 +375,70 @@ def api_voices():
         for f in glob.glob(os.path.join(voice_folder, '*.mp3'))
     )
 
-    return jsonify({'voices': ['shuffle'] + names, 'default': default})
+    available = get_available_engines()
+    return jsonify({'voices': ['shuffle'] + names, 'default': default,
+                    'engines': [{'id': e, 'label': ENGINE_LABELS[e]} for e in available],
+                    'default_engine': get_default_engine()})
 
-@app.route('/api/settings', methods=['POST'])
-def api_settings():
-    """Save default voice to config.json."""
-    data  = request.json
-    voice = data.get('voice_file', '').strip()
-    if not voice:
-        return jsonify({'error': 'No voice specified.'}), 400
-
-    # Edit just the voice_file line so comments in config.json survive
+def set_config_string(key, value):
+    """Set one top-level string setting in config.json by editing just its
+    line, so comments in the file survive. Returns True on success."""
     config_path = os.path.join(APP_DIR, 'config.json')
     with open(config_path, 'r', encoding='utf-8') as f:
         text = f.read()
-    new_line = '"voice_file": ' + json.dumps(voice, ensure_ascii=False)
-    text, n = re.subn(r'"voice_file"\s*:\s*"(?:[^"\\]|\\.)*"',
-                      lambda m: new_line, text, count=1)
+    new_line = json.dumps(key) + ': ' + json.dumps(value, ensure_ascii=False)
+    n = 0
+    for m in re.finditer(r'"' + re.escape(key) + r'"\s*:\s*"(?:[^"\\]|\\.)*"', text):
+        # only the top-level key, not one inside domain_overrides etc.
+        before = re.sub(r'"(?:[^"\\]|\\.)*"|//[^\n]*', '', text[:m.start()])
+        if before.count('{') - before.count('}') == 1:
+            text = text[:m.start()] + new_line + text[m.end():]
+            n = 1
+            break
     if not n:
-        # No voice_file line yet: add one right after the opening brace.
+        # No line for it yet: add one right after the opening brace.
         text, n = re.subn(r'^\{[ \t]*\r?\n', lambda m: m.group(0) + '  ' + new_line + ',\n',
                           text, count=1, flags=re.M)
     if not n:
-        return jsonify({'error': 'voice_file not found in config.json.'}), 500
+        return False
     with open(config_path, 'w', encoding='utf-8') as f:
         f.write(text)
+    return True
 
-    print(f'[Article2Pod] Default voice set to: {voice}')
+@app.route('/api/settings', methods=['POST'])
+def api_settings():
+    """Save the default voice and/or default engine to config.json."""
+    data   = request.json or {}
+    voice  = (data.get('voice_file') or '').strip()
+    engine = normalize_engine(data.get('tts_engine'))
+    if not voice and not engine:
+        return jsonify({'error': 'Nothing to save.'}), 400
+    if voice:
+        if not set_config_string('voice_file', voice):
+            return jsonify({'error': 'Could not write voice_file to config.json.'}), 500
+        print(f'[Article2Pod] Default voice set to: {voice}')
+    if engine:
+        if not set_config_string('tts_engine', engine):
+            return jsonify({'error': 'Could not write tts_engine to config.json.'}), 500
+        print(f'[Article2Pod] Default engine set to: {ENGINE_LABELS[engine]}')
+    return jsonify({'ok': True})
+
+@app.route('/api/queue/engine', methods=['PATCH'])
+def api_queue_engine():
+    """Set the per-item engine on a queue item ("" = automatic)."""
+    data   = request.json or {}
+    slug   = (data.get('slug') or '').strip()
+    engine = normalize_engine(data.get('engine'))
+    if not slug:
+        return jsonify({'error': 'No slug specified.'}), 400
+    with queue_lock:
+        q    = load_queue()
+        item = next((i for i in q if i['slug'] == slug), None)
+        if not item:
+            return jsonify({'error': 'Item not found.'}), 404
+        item['engine'] = engine
+        save_queue(q)
+    print(f'[Article2Pod] Engine for {slug} set to: {ENGINE_LABELS.get(engine, "automatic")}')
     return jsonify({'ok': True})
 
 @app.route('/api/queue/voice', methods=['PATCH'])

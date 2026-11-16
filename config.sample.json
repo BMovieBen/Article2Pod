@@ -62,10 +62,27 @@
   "track_log": "log\\track-log.json",
 
   // ───────────────────────── Audio generation ─────────────────────────
-  // Audio workflow (ComfyUI API format), relative to the Article2Pod folder. Default: workflow\workflow-api.json
-  // The TTS engine is picked from the nodes in this file: copy workflow\workflow-api.vibevoice.sample.json
-  // or workflow\workflow-api.breeze.sample.json to workflow-api.json.
-  "workflow_file": "workflow\\workflow-api.json",
+  // One audio workflow (ComfyUI API format) per TTS engine, relative to the Article2Pod folder. An engine
+  // is offered only if its file exists: copy workflow\workflow-api.vibevoice.sample.json and/or
+  // workflow\workflow-api.breeze.sample.json to these names. With only one of them, every job uses it.
+  // Defaults: workflow\workflow-api.vibevoice.json and workflow\workflow-api.breeze.json
+  "workflow_file_vibevoice": "workflow\\workflow-api.vibevoice.json",
+  "workflow_file_breeze": "workflow\\workflow-api.breeze.json",
+  // Engine used when both workflows exist and neither the queue card, the site (domain_overrides) nor
+  // the voice ("voices" below) picks one: "vibevoice" or "breeze". The settings gear in the app saves
+  // this. Which engine a job uses, first match wins: the card > the site > the voice > tts_engine.
+  // Default: vibevoice
+  "tts_engine": "vibevoice",
+  // Run the queue grouped by engine: after a job, the next article for the same engine goes first,
+  // so the models are swapped less often. Off keeps your queue order. When the engine does change
+  // between jobs, ComfyUI's memory is freed first (only if ComfyUI has no other jobs). Default: false
+  "group_by_engine": false,
+  // Settings per voice sample, keyed by file name in voice_folder (case doesn't matter, ".mp3"
+  // optional). Breeze's own per-voice settings are in "breeze" -> "voices".
+  //   engine   "vibevoice" or "breeze": the engine this voice uses unless the card or site picks one
+  "voices": {
+    // "YourVoice.mp3": { "engine": "vibevoice" }
+  },
   // VibeVoice only. Filename prefix of your workflow's SaveAudioMP3 node. Default: audio/podcast
   "audio_output_prefix": "audio/podcast",
   // Long articles are split into chunks of about this many words, ending at a paragraph break where possible. Default: 1400
@@ -75,31 +92,28 @@
   // Save a log of each generation run. Default: true
   "generation_logging_enabled": false,
 
-  // ───────────────────────── Breeze TTS 2 (only used with the Breeze workflow) ─────────────────────────
-  // Every key is optional. Leave out anything you don't want to change: the values shown are the
-  // built-in defaults, tuned by ear. Before the voice reads an article, the text model from ai_cleanup
-  // picks the article's genre and which sentences are quotes. Each genre has a voice direction (how to
-  // read) and a guidance value (how strongly to apply it: 1.0 ignores the direction, low values keep more
-  // of the voice sample's own personality, high values follow the direction more closely but can flatten
-  // the voice). Most specific wins: domain_overrides > a voice's genre settings > a voice's own settings >
-  // genres > the global values here.
+  // ───────────────────────── Breeze TTS 2 (only used for Breeze jobs) ─────────────────────────
+  // Every key is optional except the genres: leave them out and every article gets the plain global
+  // direction below. Before the voice reads an article, the text model from ai_cleanup picks one of
+  // the genres listed under "genres" and which sentences are quotes. Each genre has a voice direction
+  // (how to read) and a guidance value (how strongly to apply it: 1.0 ignores the direction, low values
+  // keep more of the voice sample's own personality, high values follow the direction more closely but
+  // can flatten the voice). Most specific wins: domain_overrides > a voice's genre settings > a voice's
+  // own settings > the genre > the global values here.
   // The voice sample's transcript is created on first use (voices\<name>.txt; edit it if Whisper misheard;
   // it is only remade if you replace the mp3 with a newer file)
   // using ai_quality_check.asr_model_dir. Samples over 60 seconds are trimmed (voices\<name>.breeze.wav).
   // When ai_quality_check.mode is "retry", each piece is checked with Whisper and regenerated with a new
   // seed if it scores below min_match (short pieces are allowed two misheard words).
   "breeze": {
-    // Guidance for the narration in genres that don't set their own (entertainment, tech_gaming,
-    // feature, humor, interview).
+    // Guidance for the narration when the genre doesn't set narrator_guidance. Default: 1.5
     "guidance": 1.5,
-    // Guidance for quotes in genres that don't set their own.
+    // Guidance for quotes when the genre doesn't set quote_guidance. Default: 2.5
     "quote_guidance": 2.5,
     // Variation in delivery. 0.9 is Breeze's default; higher is more varied but can slur words.
     "temperature": 0.9,
     // Seed for the first take of every piece (same seed + same text = same audio). Retries use random seeds.
     "seed": 42,
-    // Genre used when genre_mode is "off" or the text model fails.
-    "default_genre": "news",
     // How the genre is picked: "llm" (the text model reads the article) or "off" (always default_genre,
     // unless a site in domain_overrides sets "genre").
     "genre_mode": "llm",
@@ -122,8 +136,15 @@
     // Seconds to wait for the text model, including time queued behind other ComfyUI jobs. If it times
     // out, default_genre and the quotation-mark check are used.
     "timeout_seconds": 1800,
-    // Changes to the built-in genre presets. Genres: opinion, news, entertainment, tech_gaming, feature,
-    // humor, interview. Only list what you want to change; the rest of the preset is kept. Keys:
+    // Direction used when no genre applies (no genres listed, or none picked). Defaults shown.
+    "narrator": "Clear, natural, conversational delivery.",
+    "quote": "Clear, natural, conversational delivery.",
+    // Genre used when genre_mode is "off" or the text model fails. Must be one of the genres below.
+    // Default: none (the global values above).
+    "default_genre": "news",
+    // The genres the text model chooses from. Add, rename or remove genres freely; the names and
+    // descriptions are what the model sees. Keys (all optional):
+    //   description        what belongs in this genre, shown to the text model
     //   narrator           voice direction for the writer's own words
     //   narrator_guidance  guidance for the narration (falls back to "guidance" above)
     //   quote              voice direction for quotes
@@ -131,14 +152,61 @@
     //   quote_cue          spoken before each quote, e.g. "Quote:" ("" for none)
     //   quote_end_pause    seconds of silence after a quote
     //   temperature        variation in delivery for this genre
-    // Built-in values of the two presets tuned by ear:
-    //   opinion: narrator "Lively, animated, cheeky British comic delivery with a brisk pace, sarcastic
-    //            emphasis and lots of expression." at 1.25; quotes in the news-anchor voice at 2.5, no cue
-    //   news:    "Confident, energetic news anchor delivery: loud, clear, brisk and authoritative." at 2.5
-    //            for narration and quotes, quote_cue "Quote:", quote_end_pause 1.0
+    // opinion and news were tuned by ear; the others are untested starting points.
     "genres": {
-      // "entertainment": { "narrator_guidance": 1.25, "temperature": 1.0 },
-      // "news": { "quote_cue": "", "quote_end_pause": 0.65 }
+      "opinion": {
+        "description": "columns, op-eds, blogs and commentary in the writer's own voice, with strong views, sarcasm or humour (for example political columnists)",
+        "narrator": "Lively, animated, cheeky British comic delivery with a brisk pace, sarcastic emphasis and lots of expression.",
+        "narrator_guidance": 1.25,
+        "quote": "Confident, energetic news anchor delivery: loud, clear, brisk and authoritative.",
+        "quote_guidance": 2.5,
+        "quote_cue": "",
+        "quote_end_pause": 0.65
+      },
+      "news": {
+        "description": "straight reporting of politics, business, world and other general news, written in a neutral third-person voice",
+        "narrator": "Confident, energetic news anchor delivery: loud, clear, brisk and authoritative.",
+        "narrator_guidance": 2.5,
+        "quote": "Confident, energetic news anchor delivery: loud, clear, brisk and authoritative.",
+        "quote_guidance": 2.5,
+        "quote_cue": "Quote:",
+        "quote_end_pause": 1.0
+      },
+      "entertainment": {
+        "description": "film, TV, music, celebrities, culture and reviews of them, even when written as a news report",
+        "narrator": "Warm, upbeat and lightly playful conversational delivery with personality and a brisk pace.",
+        "quote": "Confident, energetic news anchor delivery: loud, clear, brisk and authoritative.",
+        "quote_cue": "",
+        "quote_end_pause": 0.65
+      },
+      "tech_gaming": {
+        "description": "technology, gadgets, software, video games and hardware news or reviews, even when written as a news report",
+        "narrator": "Enthusiastic, knowledgeable and conversational delivery, like a friendly expert host, with a brisk pace.",
+        "quote": "Confident, energetic news anchor delivery: loud, clear, brisk and authoritative.",
+        "quote_cue": "",
+        "quote_end_pause": 0.65
+      },
+      "feature": {
+        "description": "long-form storytelling, profiles and in-depth magazine pieces",
+        "narrator": "Engaging, thoughtful storytelling delivery with natural variety in pace and emphasis.",
+        "quote": "Confident, energetic news anchor delivery: loud, clear, brisk and authoritative.",
+        "quote_cue": "",
+        "quote_end_pause": 0.65
+      },
+      "humor": {
+        "description": "satire and comedy writing",
+        "narrator": "Playful, cheeky comic delivery with crisp timing and lots of expression.",
+        "quote": "Confident, energetic news anchor delivery: loud, clear, brisk and authoritative.",
+        "quote_cue": "",
+        "quote_end_pause": 0.65
+      },
+      "interview": {
+        "description": "a question-and-answer interview or transcript",
+        "narrator": "Curious, friendly and conversational delivery with a brisk pace.",
+        "quote": "Confident, energetic news anchor delivery: loud, clear, brisk and authoritative.",
+        "quote_cue": "",
+        "quote_end_pause": 0.65
+      }
     },
     // Per-voice settings, for voices the defaults don't suit. Keyed by the voice's file name in voice_folder
     // (case doesn't matter, ".mp3" optional). Used whenever that voice reads an article, from shuffle, the
@@ -149,14 +217,14 @@
     //   genres           this voice's settings for one genre, same keys as "genres" above; beats the
     //                    voice's own settings
     "voices": {
-      // "JamesRolfe.mp3": {
+      // "YourVoice.mp3": {
       //   "temperature": 1.0,
       //   "genres": {
       //     "news": { "narrator_guidance": 2.0 },
       //     "opinion": { "narrator": "Exasperated, ranting delivery with sarcastic emphasis and a brisk pace." }
       //   }
       // },
-      // "JaneLeeves.mp3": { "guidance": 1.75 }
+      // "AnotherVoice.mp3": { "guidance": 1.75 }
     }
   },
 
@@ -253,6 +321,7 @@
   // ───────────────────────── Per-site overrides ─────────────────────────
   // Settings for one site. Matches the domain and its subdomains.
   //   voice_file  voice to use for this site
+  //   engine      "vibevoice" or "breeze" for this site's articles (the card can still change it)
   //   art_path    image to always use as the art (relative to the Article2Pod folder)
   //   Breeze only (all optional):
   //   genre                  always use this genre's preset for the site (skips the text model's guess)
