@@ -1,0 +1,86 @@
+{
+  "default_voice": "shuffle",
+  "default_engine": "breeze",
+  "whisper_model_dir": "C:\\ComfyUI\\models\u0007udio_encoders\\openai_whisper-large-v3-turbo",
+  "default_genre": "news",
+  "genres": {
+    "opinion": {
+      "description": "columns, op-eds, blogs and commentary in the writer's own voice, with strong views, sarcasm or humour (for example political columnists)",
+      "narrator": "Lively, animated, cheeky British comic delivery with a brisk pace, sarcastic emphasis and lots of expression.",
+      "narrator_guidance": 1.25,
+      "quote": "Confident, energetic news anchor delivery: loud, clear, brisk and authoritative.",
+      "quote_guidance": 2.5,
+      "quote_cue": "",
+      "quote_end_pause": 0.65
+    },
+    "news": {
+      "description": "straight reporting of politics, business, world and other general news, written in a neutral third-person voice",
+      "narrator": "Confident, energetic news anchor delivery: clear and brisk. ",
+      "narrator_guidance": 1,
+      "quote": "Confident, energetic news anchor reading a quote delivery: clear, deliberate, and brisk. ",
+      "quote_guidance": 2.5,
+      "quote_cue": "Quote:",
+      "quote_end_pause": 1
+    },
+    "entertainment": {
+      "description": "film, TV, music, celebrities, culture and reviews of them, even when written as a news report",
+      "narrator": "Warm, upbeat and lightly playful conversational delivery with personality and a brisk pace.",
+      "quote": "Confident, energetic news anchor delivery: loud, clear, brisk and authoritative.",
+      "quote_cue": "",
+      "quote_end_pause": 0.65
+    },
+    "tech_gaming": {
+      "description": "technology, gadgets, software, video games and hardware news or reviews, even when written as a news report",
+      "narrator": "Enthusiastic, knowledgeable and conversational delivery, like a friendly expert host, with a brisk pace.",
+      "quote": "Confident, energetic news anchor delivery: loud, clear, brisk and authoritative.",
+      "quote_cue": "",
+      "quote_end_pause": 0.65
+    },
+    "feature": {
+      "description": "long-form storytelling, profiles and in-depth magazine pieces",
+      "narrator": "Engaging, thoughtful storytelling delivery with natural variety in pace and emphasis.",
+      "quote": "Confident, energetic news anchor delivery: loud, clear, brisk and authoritative.",
+      "quote_cue": "",
+      "quote_end_pause": 0.65
+    },
+    "humor": {
+      "description": "satire and comedy writing",
+      "narrator": "Playful, cheeky comic delivery with crisp timing and lots of expression.",
+      "quote": "Confident, energetic news anchor delivery: loud, clear, brisk and authoritative.",
+      "quote_cue": "",
+      "quote_end_pause": 0.65
+    },
+    "interview": {
+      "description": "a question-and-answer interview or transcript",
+      "narrator": "Curious, friendly and conversational delivery with a brisk pace.",
+      "quote": "Confident, energetic news anchor delivery: loud, clear, brisk and authoritative.",
+      "quote_cue": "",
+      "quote_end_pause": 0.65
+    }
+  },
+  "sites": {
+    "example.com": {
+      "voice": "YourVoice.mp3",
+      "art": "art\\example-default.jpg"
+    },
+    "blocked-site.com": {
+      "paste_only": true
+    }
+  },
+  "voices": {
+    "YourVoice.mp3": {
+      "breeze": {
+        "guidance": 1.25
+      }
+    },
+    "AnotherVoice.mp3": {
+      "engine": "vibevoice",
+      "vibevoice": {
+        "speed": 1.05
+      }
+    }
+  },
+  "pronunciations": {
+    "Sen.": "Senator"
+  }
+}

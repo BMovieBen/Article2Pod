@@ -1,38 +1,32 @@
-# User configuration
-config.json
+# Your settings (settings.sample.json is the starting point)
+settings.json
 
-# User workflow
-workflow/workflow-api.vibevoice.json
-workflow/workflow-api.breeze.json
-workflow/cleanup-workflow-api.json
+# Your workflows (the .sample.json files are in the repo)
+workflow/breeze.json
+workflow/vibevoice.json
+workflow/text.json
+workflow/art.json
 
-# Working files
-temp/
-log/
-log/track-log.json
+# Database, work files, previews, ComfyUI console log
+data/
+
+# Voice samples, finished MP3s and site art
+voices/
+output/
+*.mp3
+/art
 
 # Project files
 archive/
 roadmap.txt
+.claude/
 
 # Python
-scripts/__pycache__/
 __pycache__/
 *.pyc
 *.pyo
-
-# Voice samples and audio files
-*.mp3
-voices/
+.pytest_cache/
 
 # OS
 .DS_Store
 Thumbs.db
-queue.json
-workflow/art-workflow-api.json
-workflow/cleanup-workflow-api.json
-workflow/workflow-api.json
-workflow/workflow-api.vibevoice-backup.json
-
-/art
-extra_model_paths.yaml
