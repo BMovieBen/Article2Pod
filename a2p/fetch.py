@@ -7,6 +7,7 @@ pronunciation fixes are applied later, when the text is read, so changing
 them never needs a re-fetch.
 """
 import os
+from urllib.parse import parse_qsl, urlencode, urlsplit
 from . import db, settings, sources, textclean
 from .sources import NeedsPaste                      # noqa: F401  (re-exported for callers)
 from .sources.webpage import clean_body
@@ -26,9 +27,60 @@ def from_paste(pasted):
             'text': clean_body('\n'.join(lines), author)}
 
 
-def add(url='', pasted=''):
-    """Fetch and queue one item. Returns the job id."""
-    item = from_url(url) if url else from_paste(pasted)
+# ---- duplicates --------------------------------------------------------------
+class Duplicate(Exception):
+    """The same article is already in the queue."""
+
+
+class AlreadyMade(Exception):
+    """The same article was already made and its file is still in the library."""
+
+
+TRACKING = {'fbclid', 'gclid', 'mc_cid', 'mc_eid', 'cmpid', 'ref', 'ref_src', 'smid', 'taid', 'ito', 'mod', 'guccounter'}
+
+
+def url_key(url):
+    """A URL reduced to what identifies the page: no scheme, no www., no
+    #anchor, no tracking parameters, no trailing slash."""
+    u = urlsplit((url or '').strip())
+    host = u.netloc.lower().removeprefix('www.')
+    query = sorted((k, v) for k, v in parse_qsl(u.query, keep_blank_values=True)
+                   if not (k.lower().startswith('utm_') or k.lower() in TRACKING))
+    return host + (u.path.rstrip('/') or '') + ('?' + urlencode(query) if query else '')
+
+
+def _item_key(title, site, author):
+    return tuple(' '.join((x or '').lower().split()) for x in (title, site, author))
+
+
+def check_duplicate(url='', item=None, again=False):
+    """Raise Duplicate when the article is already queued, or AlreadyMade
+    (unless again) when it was made and its file still exists. A URL is
+    matched on url_key; pasted text on title, site and author."""
+    if url:
+        key = url_key(url)
+        same = lambda j: j['url'] and url_key(j['url']) == key
+    else:
+        key = _item_key(item['title'], item['site'], item['author'])
+        same = lambda j: _item_key(j['title'], j['site'], j['author']) == key
+    for j in db.jobs():
+        if not same(j):
+            continue
+        if j['status'] != 'done':
+            raise Duplicate(f'Already in the queue: {j["title"]}')
+        if not again and j['output_path'] and os.path.isfile(j['output_path']):
+            raise AlreadyMade(f'Already made and still in your library: {j["title"]}. Add it again?')
+
+
+def add(url='', pasted='', again=False):
+    """Fetch and queue one item. Returns the job id. Raises Duplicate,
+    AlreadyMade (pass again=True to add anyway) or NeedsPaste."""
+    if url:
+        check_duplicate(url, again=again)             # before fetching, so a duplicate costs nothing
+        item = from_url(url)
+    else:
+        item = from_paste(pasted)
+        check_duplicate(item=item, again=again)
     info = {'source': item.get('source')}
     if item['kind'] == 'article':
         words = len((item.get('text') or '').split())

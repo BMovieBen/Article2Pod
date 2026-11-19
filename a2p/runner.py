@@ -130,6 +130,8 @@ def run_article(job, whisper_box):
         for n in range(1, max_attempts + 1):
             seed = engine.first_seed() if n == 1 else random.randint(1, 2**31 - 1)
             res, path = engine.render(plan, seg, idx, seed, os.path.join(work, f'j{job_id}_s{idx:03d}_a{n}'))
+            if res.note:
+                db.log(job_id, res.note)
             if not res.ok:
                 for a in attempts:
                     db._remove(a['path'])

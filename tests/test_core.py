@@ -221,7 +221,7 @@ def test_vibevoice_applies_speed_and_guidance(conf, monkeypatch, tmp_path):
     monkeypatch.setattr(vibevoice.comfy, 'load_workflow', lambda name: wf)
     monkeypatch.setattr(vibevoice.voices, 'to_comfy_input', lambda p: 'Bill.mp3')
     sent = []
-    monkeypatch.setattr(vibevoice.comfy, 'run', lambda w, timeout: sent.append(w) or vibevoice.comfy.Result('error', 'stop here'))
+    monkeypatch.setattr(vibevoice.comfy, 'run', lambda w, timeout, **k: sent.append(w) or vibevoice.comfy.Result('error', 'stop here'))
     eng = vibevoice.VibeVoice()
     plan = eng.plan({'title': 'T', 'author': 'A', 'text': 'Some words here.'}, 'Bill.mp3', lambda m: None)
     eng.render(plan, plan['segments'][0], 0, 7, str(tmp_path / 'out'))

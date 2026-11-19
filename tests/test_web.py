@@ -298,3 +298,53 @@ def test_preview_uses_unsaved_settings_without_saving_them(client, monkeypatch):
     bad = dict(saved, voices={'Carl.mp3': {'vibevoice': {'speed': 5}}})
     r = client.post('/api/preview', json={'voice': 'Carl.mp3', 'settings': bad})
     assert r.status_code == 409 and 'speed' in r.get_json()['error']
+
+
+def test_stats_hide_voices_without_a_sample(client, tmp_path):
+    from a2p import stats
+    (tmp_path / 'voices').mkdir()
+    (tmp_path / 'voices' / 'Kept.mp3').write_bytes(b'')
+    job = db.get_job(db.add_job(slug='k', title='T', author='A', site='S', text='x', voice_used='Kept.mp3', engine_used='breeze', status='done', info={}))
+    stats.record_take(job, 'Kept.mp3', 'breeze', 'narr', 100, 1, 0.98, 0.98, 50)
+    stats.record_take(job, 'Gone.mp3', 'breeze', 'narr', 100, 2, 0.80, 0.95, 50)
+    d = client.get('/api/stats').get_json()
+    assert [v['voice'] for v in d['voices']] == ['Kept']
+    assert d['totals']['segments'] == 2        # totals still count every voice
+
+
+def test_url_key_ignores_noise():
+    assert fetch.url_key('https://www.Example.com/a/b/?utm_source=x&id=3#top') == fetch.url_key('http://example.com/a/b?id=3')
+    assert fetch.url_key('https://example.com/a?id=3') != fetch.url_key('https://example.com/a?id=4')
+    assert fetch.url_key('https://example.com/a?mode=x') != fetch.url_key('https://example.com/a')
+
+
+def test_duplicate_url_in_queue_is_refused_before_fetching(client, monkeypatch):
+    assert add(client, url='https://example.com/a').status_code == 200
+    calls = []
+    monkeypatch.setattr(fetch, 'from_url', lambda url: calls.append(url) or dict(ARTICLE))
+    r = add(client, url='https://www.example.com/a/?utm_source=feed#x')
+    assert r.status_code == 409 and r.get_json()['duplicate'] and not calls
+    assert len(client.get('/api/state').get_json()['jobs']) == 1
+
+
+def test_duplicate_paste_in_queue_is_refused(client, monkeypatch):
+    item = dict(ARTICLE, source='paste')
+    monkeypatch.setattr(fetch, 'from_paste', lambda text: dict(item))
+    assert client.post('/api/add', json={'text': 'x'}).status_code == 200
+    r = client.post('/api/add', json={'text': 'x'})
+    assert r.status_code == 409 and r.get_json()['duplicate']
+
+
+def test_already_made_asks_then_allows_again(client, tmp_path):
+    job_id = add(client, url='https://example.com/a').get_json()['id']
+    mp3 = tmp_path / 'made.mp3'
+    mp3.write_bytes(b'')
+    db.update_job(job_id, status='done', output_path=str(mp3))
+    r = add(client, url='https://example.com/a')
+    assert r.status_code == 409 and r.get_json()['already_made']
+    assert client.post('/api/add', json={'url': 'https://example.com/a', 'again': True}).status_code == 200
+    mp3.unlink()                                   # file gone from the library: no question
+    db.update_job(job_id, status='done')
+    jobs = [j for j in client.get('/api/state').get_json()['jobs'] if j['status'] != 'done']
+    db.update_job(jobs[0]['id'], status='done')
+    assert add(client, url='https://example.com/a').status_code == 200

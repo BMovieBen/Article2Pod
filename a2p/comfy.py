@@ -4,18 +4,20 @@ ComfyUI is shared with other work, so this never touches a prompt it did
 not submit: cancelling removes or interrupts only our own prompt ids, and
 memory is freed only when asked.
 """
-import json, os, threading, time
+import collections, json, os, threading, time
 import requests
 from . import settings
 
 stop = threading.Event()          # set by the runner's Stop; checked between polls
 _own = set()                      # prompt ids we submitted and that may still be queued/running
 _lock = threading.Lock()
+_submitted = collections.deque(maxlen=200)   # our recent prompt ids, to tell our history entries from others'
 
 
 class Result:
     def __init__(self, status, detail='', entry=None, seconds=0.0):
         self.status, self.detail, self.entry, self.seconds = status, detail, entry, seconds
+        self.note = ''                # something worth putting in the job log (e.g. memory was freed first)
         self.ok = status == 'success'
 
 
@@ -75,12 +77,57 @@ def find_node(workflow, *class_types):
     return None, None
 
 
-def run(workflow, timeout=1800, poll=1.0):
+def _latest_history_id():
+    hist = requests.get(f'{url()}/history', params={'max_items': 1}, timeout=10).json()
+    return next(reversed(hist), None) if hist else None
+
+
+def make_room(poll=2.0):
+    """Before a speech segment: wait until nobody else's prompt is queued or
+    running, then unload everything if someone else's prompt ran since our
+    last one. Speech models crashed the GPU driver twice when they started
+    right after another big model (see NOTES.md, 2026-11-17 and 2026-11-19).
+    Returns a note for the job log ('' when nothing was done), or None when
+    Stop was pressed while waiting."""
+    waited = False
+    while True:
+        try:
+            run_ids, pend_ids = queue_state()
+        except Exception:
+            break
+        if not [i for i in run_ids + pend_ids if i not in _own]:
+            break
+        waited = True
+        if stop.wait(poll):
+            return None
+    try:
+        latest = _latest_history_id()
+    except Exception:
+        latest = None
+    if waited or (latest and latest not in _submitted):
+        free()
+        return 'Another ComfyUI job used the GPU since our last step: freed ComfyUI memory first.'
+    return ''
+
+
+def run(workflow, timeout=1800, poll=1.0, fresh=False):
     """Submit a workflow and wait for it. Returns a Result whose status is
     success | error | cancelled | timeout. Result.seconds is ComfyUI's own
-    execution time, so time spent queued behind other jobs is not counted."""
+    execution time, so time spent queued behind other jobs is not counted.
+    fresh=True: make_room() first (speech segments)."""
     if stop.is_set():
         return Result('cancelled', 'Stop requested.')
+    note = ''
+    if fresh:
+        note = make_room()
+        if note is None:
+            return Result('cancelled', 'Stop requested.')
+    res = _run(workflow, timeout, poll)
+    res.note = note
+    return res
+
+
+def _run(workflow, timeout, poll):
     base = url()
     try:
         r = requests.post(f'{base}/prompt', json={'prompt': workflow}, timeout=30)
@@ -93,6 +140,7 @@ def run(workflow, timeout=1800, poll=1.0):
         return Result('error', 'ComfyUI returned no prompt_id.')
     with _lock:
         _own.add(pid)
+        _submitted.append(pid)
     started, missing, unreachable, was_down = time.time(), 0, 0, False
     try:
         while time.time() - started < timeout:

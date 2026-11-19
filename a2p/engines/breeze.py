@@ -105,7 +105,7 @@ class Breeze(Engine):
             inp['instruction'] = p['quote'] if quote else p['narrator']
             inp['cfg_scale']   = float(p['quote_guidance'] if quote else p['narrator_guidance'])
         save['inputs']['filename_prefix'] = f'audio/a2p_{os.path.basename(out_base)}'
-        res = comfy.run(wf, timeout=ctx['timeout'])
+        res = comfy.run(wf, timeout=ctx['timeout'], fresh=True)
         if not res.ok:
             return res, None
         made = comfy.output_file(res.entry, 'audio')
