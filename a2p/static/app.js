@@ -55,7 +55,11 @@ $('addBtn').onclick = async () => {
   const btn = $('addBtn');
   btn.disabled = true; btn.textContent = 'Adding...';
   try {
-    await api('POST', '/api/add', body);
+    try { await api('POST', '/api/add', body); }
+    catch (e) {                                   // made before and still in the library: ask, then add anyway
+      if (!(e.data && e.data.already_made && confirm(e.message))) throw e.data && e.data.already_made ? new Error('') : e;
+      await api('POST', '/api/add', { ...body, again: true });
+    }
     $('url').value = ''; $('text').value = '';
     banner('');
   } catch (e) {
@@ -262,7 +266,7 @@ function renderQueue(jobs) {
 }
 
 function render() {
-  const queue = S.jobs.filter(j => j.status !== 'done');
+  const queue = S.jobs.filter(j => j.status !== 'done').reverse();   // newest at the top; the queue still runs oldest first
   renderQueue(queue);
   const doneCount = S.jobs.filter(j => j.status === 'done').length;
   if (!$('tab-finished').hidden && doneCount !== lastDone) loadLibrary();      // something just finished
@@ -426,7 +430,6 @@ function drawStats(d) {
       ${d.imported ? '' : '<div style="text-align:center"><button class="ghost" onclick="importStats(this)">Import history from the original app</button></div>'}`;
     return;
   }
-  const worst = d.voices.filter(v => v.segments >= 5 && v.retry_rate).slice(0, 3);
   const engineName = id => (S.engines.find(e => e.id === id) || {}).label || id;
   $('stats').innerHTML = `
     <div class="tiles">
@@ -438,8 +441,6 @@ function drawStats(d) {
       <div class="tile"><b>${pct(t.retry_rate)}</b><span>segments retried</span></div>
       <div class="tile"><b>${pct(t.match)}</b><span>average match</span></div>
     </div>
-    ${worst.length ? `<div class="sect"><h2>Voices that need the most retries</h2>
-      <p class="help">${worst.map(v => `<b>${esc(v.voice)}</b>: ${pct(v.retry_rate)} of ${v.segments} segments needed another take`).join(' &middot; ')}</p></div>` : ''}
     <div class="sect"><h2>Voices</h2>
       <p class="help">Match is how closely Whisper\u2019s transcript of the audio matched the text (100% = every word heard as written). A segment is retried when its first take scores below the threshold; the best take is kept. Hover a heading for details.</p>
       ${table([

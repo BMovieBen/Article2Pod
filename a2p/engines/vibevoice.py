@@ -91,7 +91,7 @@ class VibeVoice(Engine):
         prefix = f'audio/a2p_{name}'
         save['inputs']['filename_prefix'] = prefix
         try:
-            res = comfy.run(wf, timeout=ctx['timeout'])
+            res = comfy.run(wf, timeout=ctx['timeout'], fresh=True)
         finally:
             try:
                 os.remove(text_file)

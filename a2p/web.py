@@ -131,7 +131,11 @@ def api_add():
     if url and not url.lower().startswith(('http://', 'https://')):
         return fail('That is not a URL. To add plain text, switch to Text.')
     try:
-        return jsonify({'id': fetch.add(url=url, pasted=text)})
+        return jsonify({'id': fetch.add(url=url, pasted=text, again=bool(data.get('again')))})
+    except fetch.Duplicate as e:
+        return fail(str(e), 409, duplicate=True)
+    except fetch.AlreadyMade as e:
+        return fail(str(e), 409, already_made=True)
     except fetch.NeedsPaste as e:
         return fail(str(e), 409, needs_paste=True)
     except Exception as e:
@@ -385,7 +389,11 @@ def api_library_delete():
 @app.get('/api/stats')
 def api_stats():
     days = request.args.get('days', '')
-    return jsonify(stats.summary(int(days) if days.isdigit() and int(days) > 0 else None))
+    d = stats.summary(int(days) if days.isdigit() and int(days) > 0 else None)
+    # only voices that still have a sample in the voices folder
+    present = {settings.name_key(n) for n in voices.available()}
+    d['voices'] = [v for v in d['voices'] if settings.name_key(v['voice']) in present]
+    return jsonify(d)
 
 
 @app.post('/api/stats/import')
