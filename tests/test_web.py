@@ -348,3 +348,22 @@ def test_already_made_asks_then_allows_again(client, tmp_path):
     jobs = [j for j in client.get('/api/state').get_json()['jobs'] if j['status'] != 'done']
     db.update_job(jobs[0]['id'], status='done')
     assert add(client, url='https://example.com/a').status_code == 200
+
+
+def test_library_edits_keep_the_files_place(lib):
+    import io, os
+    from PIL import Image
+    c = lib['client']
+    os.utime(lib['old'], (1_000_000_000, 1_000_000_000))          # the old file: long ago
+    os.utime(lib['mine'], (1_500_000_000, 1_500_000_000))         # mine: newer
+    assert [f['title'] for f in c.get('/api/library').get_json()['files']] == ['A Headline', 'Made By The Old App']
+    r = c.patch('/api/library', json={'path': 'Old Site/Ann Author/Old Site - Made By The Old App.mp3',
+                                      'title': 'Renamed Old One', 'author': 'Ann Author', 'site': 'Old Site'})
+    assert r.status_code == 200
+    img = io.BytesIO(); Image.new('RGB', (20, 20), 'red').save(img, 'PNG')
+    rel = r.get_json()['path']
+    assert c.post('/api/library/art?path=' + rel, data={'image': (io.BytesIO(img.getvalue()), 'a.png')},
+                  content_type='multipart/form-data').status_code == 200
+    files = c.get('/api/library').get_json()['files']
+    assert [f['title'] for f in files] == ['A Headline', 'Renamed Old One'] and files[1]['has_art']
+    assert int(files[1]['modified']) == 1_000_000_000

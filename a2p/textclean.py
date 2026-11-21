@@ -147,7 +147,10 @@ def get_author(soup):
 def get_site_name(soup, base_url):
     og = soup.find('meta', property='og:site_name')
     if og and og.get('content', '').strip():
-        return og['content'].strip()
+        name = og['content'].strip()
+        if not name.lower().startswith(('http://', 'https://', 'www.')):
+            return name
+        base_url = name if '://' in name else 'https://' + name     # some sites put their address there (azfamily.com)
     domain = urlparse(base_url).netloc.replace('www.', '')
     return domain_to_site_name(domain)
 

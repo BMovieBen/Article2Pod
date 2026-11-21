@@ -1,4 +1,4 @@
-"""Getting the audio for download jobs (YouTube, JW Player, a page's own
+"""Getting the audio for download jobs (YouTube, JW Player, Arc video pages, a page's own
 MP3). Each returns the path of an MP3 in the job's work folder. Stop
 cancels a download in progress."""
 import os, subprocess, sys, time
@@ -44,6 +44,11 @@ def jwplayer(media_id, dest, log):
     src = stream_url(media_id)
     if not src:
         raise RuntimeError(f'No downloadable source for JW Player video {media_id}.')
+    ffmpeg(src, dest, log)
+
+
+def ffmpeg(src, dest, log):
+    """Audio track of a video address (MP4 or HLS playlist)."""
     _run(['ffmpeg', '-y', '-loglevel', 'error', '-user_agent', textclean.CHROME_UA,
           '-i', src, '-vn', '-ac', '2', '-q:a', '0', dest], 'The video download')
 
@@ -73,6 +78,8 @@ def fetch(job, work_dir, log):
             ytdlp(how['url'], dest, log)              # yt-dlp names its own temp files
         elif how.get('how') == 'jwplayer':
             jwplayer(how['media_id'], part, log)
+        elif how.get('how') == 'ffmpeg':
+            ffmpeg(how['url'], part, log)
         elif how.get('how') == 'http':
             http(how['url'], part, log)
         else:

@@ -120,6 +120,13 @@ def publish(job, mp3_path):
 
 
 # ---- changing a finished file ---------------------------------------------
+# The library is sorted by each file's modified time, so edits must not touch it.
+def _save_keeping_time(tags, mp3_path):
+    st = os.stat(mp3_path)
+    tags.save(mp3_path)
+    os.utime(mp3_path, ns=(st.st_atime_ns, st.st_mtime_ns))
+
+
 def read_tags(mp3_path):
     """{'title', 'site', 'author', 'track', 'has_art'} from an MP3 we (or the
     original app) filed. Missing tags come back as ''."""
@@ -145,7 +152,7 @@ def set_art(mp3_path, jpeg_path):
     tags.delall('APIC')
     with open(jpeg_path, 'rb') as f:
         tags.add(APIC(encoding=3, mime='image/jpeg', type=3, desc='Cover', data=f.read()))
-    tags.save(mp3_path)
+    _save_keeping_time(tags, mp3_path)
 
 
 def retag(mp3_path, title, site, author):
@@ -163,7 +170,7 @@ def retag(mp3_path, title, site, author):
     tags.add(TPE1(encoding=3, text=site))
     tags.add(TPE2(encoding=3, text=site))
     tags.add(TALB(encoding=3, text=author))
-    tags.save(mp3_path)
+    _save_keeping_time(tags, mp3_path)
     site_part = textclean.sanitize_filename(site)
     folder = os.path.join(settings.load()['output_dir'], site_part, textclean.sanitize_filename(author))
     os.makedirs(folder, exist_ok=True)

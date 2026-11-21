@@ -8,7 +8,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
     id          INTEGER PRIMARY KEY,
     slug        TEXT NOT NULL,
-    kind        TEXT NOT NULL DEFAULT 'article',   -- article | youtube | audio | jwplayer
+    kind        TEXT NOT NULL DEFAULT 'article',   -- article | youtube | audio | jwplayer | video
     status      TEXT NOT NULL DEFAULT 'pending',   -- pending | processing | done | failed | stopped
     url         TEXT, title TEXT, author TEXT, site TEXT,
     text        TEXT,               -- cleaned article body (title/byline are separate)
