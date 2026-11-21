@@ -180,3 +180,45 @@ def test_stop_during_download(dl, monkeypatch):
     runner.run_queue()
     assert db.get_job(job_id)['status'] == 'stopped'
     runner.comfy.stop.clear()
+
+
+# ---- Arc XP video pages (azfamily.com and other Gray TV stations) -------------
+def arc_page(kind, streams):
+    content = {'type': kind, 'headlines': {'basic': 'Lights Return to Scottsdale'}, 'duration': 133071,
+               'credits': {'by': [{'name': ''}]}, 'promo_image': {'url': 'https://img/x.jpg'}, 'streams': streams}
+    return (ARTICLE_HTML.replace('</head>', '<script>Fusion.arcSite="azfamily";Fusion.globalContent='
+                                 + json.dumps(content) + ';Fusion.layout="x";</script></head>'))
+
+ARC_STREAMS = [
+    {'stream_type': 'ts', 'url': 'https://cdn/x/master.m3u8', 'filesize': 30},
+    {'stream_type': 'mp4', 'url': 'https://cdn/x/big.mp4', 'filesize': 90},
+    {'stream_type': 'mp4', 'url': 'https://cdn/x/small.mp4', 'filesize': 20},
+]
+
+def test_arc_video_page_is_downloaded(conf, monkeypatch):
+    conf()
+    use_page(monkeypatch, arc_page('video', ARC_STREAMS))
+    item = sources.fetch('https://www.azfamily.com/video/2026/11/20/lights/')
+    assert item['source'] == 'arcvideo' and item['kind'] == 'video'
+    assert item['title'] == 'Lights Return to Scottsdale' and item['image_url'] == 'https://img/x.jpg'
+    assert item['download'] == {'how': 'ffmpeg', 'url': 'https://cdn/x/small.mp4'}
+    assert item['author'] == item['site'] and 'about 2 min' in item['note']
+
+def test_arc_story_with_a_video_is_still_an_article(conf, monkeypatch):
+    conf()
+    use_page(monkeypatch, arc_page('story', ARC_STREAMS))
+    assert sources.fetch('https://www.azfamily.com/2026/11/20/story/')['kind'] == 'article'
+
+def test_arc_stream_choice():
+    from a2p.sources import arcvideo
+    assert arcvideo.pick_stream(ARC_STREAMS[:1]) == 'https://cdn/x/master.m3u8'
+    assert arcvideo.pick_stream([]) is None
+    assert arcvideo.global_content('Fusion.globalContent={broken') is None
+
+def test_site_name_that_is_an_address_becomes_the_domain():
+    from bs4 import BeautifulSoup
+    from a2p import textclean
+    soup = BeautifulSoup('<meta property="og:site_name" content="https://www.azfamily.com">', 'html.parser')
+    assert textclean.get_site_name(soup, 'https://www.azfamily.com/video/x/') == 'azfamily'
+    soup = BeautifulSoup('<meta property="og:site_name" content="Arizona Family">', 'html.parser')
+    assert textclean.get_site_name(soup, 'https://www.azfamily.com/x/') == 'Arizona Family'

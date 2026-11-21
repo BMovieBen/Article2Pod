@@ -6,7 +6,7 @@ source, write a module here with a Source subclass and add it to ORDER
 before WebPage, which is the fallback for any ordinary web page.
 
 A fetched item is a dict:
-    kind       'article', or a download kind ('youtube', 'jwplayer', 'audio')
+    kind       'article', or a download kind ('youtube', 'jwplayer', 'video', 'audio')
     title, author, site
     text       article body (kind 'article' only): one paragraph per line,
                block quotes indented four spaces
@@ -65,9 +65,10 @@ def _order():
     from .youtube import YouTube
     from .steam import SteamNews
     from .jwplayer import JWPlayer
+    from .arcvideo import ArcVideo
     from .audio import EmbeddedAudio
     from .webpage import WebPage
-    return [YouTube(), SteamNews(), JWPlayer(), EmbeddedAudio(), WebPage()]
+    return [YouTube(), SteamNews(), JWPlayer(), ArcVideo(), EmbeddedAudio(), WebPage()]
 
 
 ORDER = None

@@ -172,6 +172,7 @@ def api_job_edit(job_id):
         if job['status'] == 'done' and job['output_path'] and os.path.isfile(job['output_path']):
             new = dict(job, **changed)
             fields['output_path'] = audio.retag(job['output_path'], new['title'], new['site'], new['author'])
+            _tag_cache.clear()                    # edits keep the file's time, so the cache can't tell
     if fields:
         db.update_job(job_id, **fields)
     return jsonify({'ok': True})
@@ -236,6 +237,7 @@ def api_job_art_set(job_id):
     db.merge_info(job_id, art_source='custom')
     if job['status'] == 'done' and job['output_path'] and os.path.isfile(job['output_path']):
         audio.set_art(job['output_path'], dest)
+        _tag_cache.clear()
     return jsonify({'ok': True})
 
 
@@ -349,7 +351,7 @@ def api_library_edit():
     author, site = str(data.get('author') or '').strip(), str(data.get('site') or '').strip()
     new = audio.retag(path, title, site, author)
     _sync_job(path, new, title=title, author=author, site=site)
-    _tag_cache.pop(path, None)
+    _tag_cache.clear()                        # edits keep the file's time, so the cache can't tell
     db._touch()
     return jsonify({'ok': True, 'path': os.path.relpath(new, os.path.abspath(settings.load()['output_dir'])).replace('\\', '/')})
 
@@ -367,7 +369,7 @@ def api_library_art_set():
         return fail(f'Could not read that image: {e}')
     audio.set_art(path, tmp)
     os.remove(tmp)
-    _tag_cache.pop(path, None)
+    _tag_cache.clear()
     db._touch()
     return jsonify({'ok': True})
 
