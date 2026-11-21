@@ -32,10 +32,11 @@ def ytdlp(url, dest, log):
     if not _ytdlp_updated:                       # YouTube changes often; update once per app start
         _ytdlp_updated = True
         log('Checking for a yt-dlp update...')
-        subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '-U', 'yt-dlp'],
+        subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '-U', 'yt-dlp[default]'],
                        capture_output=True, text=True)
     # No forced player client: yt-dlp's defaults work; the android client 403s.
-    _run(['yt-dlp', '--no-playlist', '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0',
+    # Run through this app's own Python, so it's the copy the update above upgraded.
+    _run([sys.executable, '-m', 'yt_dlp', '--no-playlist', '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0',
           '--postprocessor-args', 'ffmpeg:-q:a 0 -ac 2 -joint_stereo 1', '--output', dest, url], 'yt-dlp')
 
 

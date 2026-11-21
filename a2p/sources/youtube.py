@@ -1,5 +1,5 @@
 """YouTube: the audio is downloaded with yt-dlp, nothing is read aloud."""
-import json, subprocess
+import json, subprocess, sys
 from urllib.parse import urlparse
 from . import NeedsPaste, Source, length
 
@@ -13,12 +13,13 @@ class YouTube(Source):
 
     def fetch(self, url, page):
         try:
-            out = subprocess.run(['yt-dlp', '--dump-json', '--no-playlist', url],
+            # Run through this app's own Python, so it's the copy the auto-update upgrades.
+            out = subprocess.run([sys.executable, '-m', 'yt_dlp', '--dump-json', '--no-playlist', url],
                                  capture_output=True, text=True, timeout=90)
-        except FileNotFoundError:
-            raise NeedsPaste('yt-dlp is not installed (pip install yt-dlp).')
         except subprocess.TimeoutExpired:
             raise NeedsPaste('YouTube did not answer in time.')
+        if 'No module named yt_dlp' in (out.stderr or ''):
+            raise NeedsPaste('yt-dlp is not installed (pip install yt-dlp).')
         if out.returncode != 0:
             raise NeedsPaste(f'yt-dlp could not read that video: {out.stderr.strip()[-300:]}')
         meta    = json.loads(out.stdout)

@@ -9,5 +9,5 @@ lxml>=5.0
 Pillow>=10.0
 pillow-heif>=0.18     # HEIC/AVIF cover art pasted from phones
 mutagen>=1.47
-yt-dlp                # YouTube downloads; kept current automatically
+yt-dlp[default]       # YouTube downloads; kept current automatically. [default] adds yt-dlp-ejs, YouTube's JS challenge solver (runs on Deno)
 # for the tests:  pip install pytest

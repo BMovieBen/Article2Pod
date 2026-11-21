@@ -20,18 +20,18 @@ I don't install or support any of this, get it working first:
 
 - [ComfyUI Desktop](https://www.comfy.org/download) (run it once) with the [Breeze TTS 2](https://github.com/saganaki22/ComfyUI-Breeze-TTS-2) nodes and/or the [VibeVoice-ComfyUI](https://github.com/Enemyx-net/VibeVoice-ComfyUI) nodes and a VibeVoice model
 - NVIDIA GPU
-- [Python](https://www.python.org/downloads/) 3.10+
+- [Python](https://www.python.org/downloads/) 3.13 (3.11+ works; yt-dlp no longer supports 3.10)
 - [ffmpeg](https://ffmpeg.org/download.html) on PATH
 
 Tested on Windows 11, RTX 4070 Super 12GB, 32GB RAM.
 
 ## Setup
 
-1. Clone it and install requirements:
+1. Clone it:
    ```powershell
    git clone https://github.com/BMovieBen/Article2Pod.git C:\ComfyUI\Article2Pod
-   pip install -r requirements.txt
    ```
+   The first run of `article2pod.bat` creates the app's own Python environment in `.venv` (with `py -3.13`) and installs `requirements.txt` into it.
 2. Copy `settings.sample.json` to `settings.json`. Every setting is optional except the genres (Breeze reads each genre with its own voice direction). Most settings can then be changed on the Settings tab.
 3. In `workflow\`, copy the sample workflows you want to use:
    - `breeze.sample.json` to `breeze.json` for Breeze TTS 2. On ComfyUI 0.44 or later, version 1.4.7 of the Breeze nodes needs the 4-line fix from [PR #15](https://github.com/saganaki22/ComfyUI-Breeze-TTS-2/pull/15).
@@ -74,7 +74,7 @@ Breeze model weights are licensed for research and non-commercial use only.
 | `a2p/cleanup.py`, `a2p/llm.py`, `a2p/art.py` | Text-model clean-up, genre and quotes, art prompt and generated art |
 | `a2p/runner.py`, `a2p/audio.py` | The queue (stop and resume); join, normalize, tag, file |
 | `a2p/web.py`, `a2p/static/` | The web page and its JSON API |
-| `tests/` | `python -m pytest tests -q` |
+| `tests/` | `.venv\Scripts\python -m pytest tests -q` (`pip install pytest` into `.venv` first) |
 
 **Adding a source:** a module in `a2p/sources/` with a `Source` subclass (`matches` and `fetch`), added to the order in `sources/__init__.py` ahead of `WebPage`.
 **Adding an engine:** a module in `a2p/engines/` with an `Engine` subclass (`plan` and `render`), its workflow in `workflow\`, listed in `engines/__init__.py`. Segments, the quality check, stop and resume then work for it unchanged.
@@ -86,7 +86,7 @@ Breeze model weights are licensed for research and non-commercial use only.
 - **The page says it cannot reach Article2Pod:** start it with `article2pod.bat`.
 - **ComfyUI won't start:** open ComfyUI Desktop by hand once; its log is in `data\comfyui-console.log` when Article2Pod started it.
 - **A site won't scrape:** paste the text, and mark the site "Blocks scraping" on the Settings tab.
-- **YouTube fails:** yt-dlp is updated automatically once per start; if it still fails, run `pip install -U yt-dlp`.
+- **YouTube fails:** yt-dlp is updated automatically once per start; if it still fails, run `.venv\Scripts\python -m pip install -U yt-dlp`.
 
 ## License
 

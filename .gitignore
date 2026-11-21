@@ -22,6 +22,7 @@ roadmap.txt
 .claude/
 
 # Python
+.venv/
 __pycache__/
 *.pyc
 *.pyo
@@ -30,5 +31,7 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Machine-specific working notes and one-off machine scripts (local only)
 NOTES.md
-NOTES.md
+*-admin.ps1
