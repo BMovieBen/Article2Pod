@@ -79,7 +79,7 @@ Breeze model weights are licensed for research and non-commercial use only.
 **Adding a source:** a module in `a2p/sources/` with a `Source` subclass (`matches` and `fetch`), added to the order in `sources/__init__.py` ahead of `WebPage`.
 **Adding an engine:** a module in `a2p/engines/` with an `Engine` subclass (`plan` and `render`), its workflow in `workflow\`, listed in `engines/__init__.py`. Segments, the quality check, stop and resume then work for it unchanged.
 
-`NOTES.md` is the running log of decisions and gotchas.
+A local, untracked `NOTES.md` (ignored by git) can hold your own running log of decisions and gotchas.
 
 ## Troubleshooting
 
