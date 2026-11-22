@@ -92,6 +92,9 @@ button.ghost.danger:hover { color: var(--danger); border-color: var(--danger); }
 
 .sect { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 14px; }
 .sect h2 { font-size: 15px; margin-bottom: 4px; }
+.sect-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+.sect-head h2 { margin-bottom: 0; }
+.sect-head select { width: auto; }
 .sect p.help { color: var(--muted); font-size: 13px; margin-bottom: 10px; }
 .grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
 .checks { display: grid; gap: 6px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-top: 10px; }

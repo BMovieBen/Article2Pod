@@ -312,6 +312,19 @@ def test_stats_hide_voices_without_a_sample(client, tmp_path):
     assert d['totals']['segments'] == 2        # totals still count every voice
 
 
+def test_stats_voice_numbers_per_engine(client, tmp_path):
+    from a2p import stats
+    (tmp_path / 'voices').mkdir()
+    (tmp_path / 'voices' / 'Kept.mp3').write_bytes(b'')
+    job = db.get_job(db.add_job(slug='k', title='T', author='A', site='S', text='x', status='done', info={}))
+    stats.record_take(job, 'Kept.mp3', 'breeze', 'narr', 100, 1, 0.98, 0.98, 50)
+    stats.record_take(job, 'Kept.mp3', 'vibevoice', 'chunk', 100, 2, 0.80, 0.95, 50)
+    v = client.get('/api/stats').get_json()['voices'][0]
+    assert v['engines'] == ['breeze', 'vibevoice'] and v['segments'] == 2 and v['retry_rate'] == 0.5
+    assert v['by_engine']['breeze']['segments'] == 1 and v['by_engine']['breeze']['retry_rate'] == 0
+    assert v['by_engine']['vibevoice']['retry_rate'] == 1 and v['by_engine']['vibevoice']['engines'] == ['vibevoice']
+
+
 def test_url_key_ignores_noise():
     assert fetch.url_key('https://www.Example.com/a/b/?utm_source=x&id=3#top') == fetch.url_key('http://example.com/a/b?id=3')
     assert fetch.url_key('https://example.com/a?id=3') != fetch.url_key('https://example.com/a?id=4')

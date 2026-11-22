@@ -406,6 +406,7 @@ audio.onpause = audio.onplay = audio.onended = () => drawLibrary();      // keep
 const pct = x => x == null ? '\u2013' : `${(x * 100).toFixed(1)}%`;
 const fixed = (x, d = 2) => x == null ? '\u2013' : Number(x).toFixed(d);
 $('statsDays').onchange = () => loadStats();
+let statsEngine = '', lastStats = null;            // Voices engine filter ('' = all engines)
 
 async function loadStats() {
   try { drawStats(await api('GET', '/api/stats?days=' + $('statsDays').value)); }
@@ -431,6 +432,14 @@ function drawStats(d) {
     return;
   }
   const engineName = id => (S.engines.find(e => e.id === id) || {}).label || id;
+  // Voices can be narrowed to one engine (each voice row carries per-engine numbers).
+  const voiceEngines = [...new Set(d.voices.flatMap(v => v.engines))].sort();
+  if (!voiceEngines.includes(statsEngine)) statsEngine = '';
+  const voiceRows = (statsEngine ? d.voices.filter(v => v.by_engine && v.by_engine[statsEngine]).map(v => v.by_engine[statsEngine]) : d.voices)
+    .slice().sort((a, b) => (b.retry_rate || 0) - (a.retry_rate || 0) || b.failed - a.failed || a.voice.localeCompare(b.voice));
+  const engineFilter = voiceEngines.length > 1 ? `<select id="statsEngine" title="Show one engine only" onchange="statsEngine = this.value; drawStats(lastStats)">
+      ${options(voiceEngines.map(e => [e, engineName(e)]), statsEngine, 'All engines')}</select>` : '';
+  lastStats = d;
   $('stats').innerHTML = `
     <div class="tiles">
       <div class="tile"><b>${t.articles}</b><span>articles read</span></div>
@@ -441,7 +450,7 @@ function drawStats(d) {
       <div class="tile"><b>${pct(t.retry_rate)}</b><span>segments retried</span></div>
       <div class="tile"><b>${pct(t.match)}</b><span>average match</span></div>
     </div>
-    <div class="sect"><h2>Voices</h2>
+    <div class="sect"><div class="sect-head"><h2>Voices</h2>${engineFilter}</div>
       <p class="help">Match is how closely Whisper\u2019s transcript of the audio matched the text (100% = every word heard as written). A segment is retried when its first take scores below the threshold; the best take is kept. Hover a heading for details.</p>
       ${table([
         { label: 'Voice', cell: v => esc(v.voice) },
@@ -454,7 +463,7 @@ function drawStats(d) {
         { label: 'Kept', num: 1, help: 'Average match of the take that was kept', cell: v => pct(v.match) },
         { label: 'Worst', num: 1, help: 'Lowest match kept in a finished file', cell: v => pct(v.worst_match) },
         { label: 's/word', num: 1, help: 'Seconds of generation per word, including retries', cell: v => fixed(v.seconds_per_word) },
-      ], d.voices)}</div>
+      ], voiceRows)}</div>
     <div class="sect"><h2>Engines</h2>
       ${table([
         { label: 'Engine', cell: e => esc(engineName(e.engine)) },

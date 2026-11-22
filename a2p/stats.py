@@ -96,13 +96,19 @@ def summary(days=None):
     voices = []
     t_by_voice = group(takes, lambda t: _name(t['voice']))
     r_by_voice = group(articles, lambda r: _name(r['voice']))
-    for name in sorted(set(t_by_voice) | set(r_by_voice)):
-        rs = r_by_voice.get(name, [])
+    def voice_row(name, rs, ts):
         row = {'voice': name, 'articles': sum(1 for r in rs if r['status'] == 'done'),
                'failed': sum(1 for r in rs if r['status'] == 'failed'),
-               'engines': sorted({t['engine'] for t in t_by_voice.get(name, []) if t['engine']} |
-                                 {r['engine'] for r in rs if r['engine']})}
-        row.update(take_numbers(t_by_voice.get(name, [])))
+               'engines': sorted({t['engine'] for t in ts if t['engine']} | {r['engine'] for r in rs if r['engine']})}
+        row.update(take_numbers(ts))
+        return row
+
+    for name in sorted(set(t_by_voice) | set(r_by_voice)):
+        rs, ts = r_by_voice.get(name, []), t_by_voice.get(name, [])
+        row = voice_row(name, rs, ts)
+        # the same numbers counting one engine only, for the Stats tab's engine filter
+        row['by_engine'] = {e: voice_row(name, [r for r in rs if r['engine'] == e], [t for t in ts if t['engine'] == e])
+                            for e in row['engines']}
         voices.append(row)
     # most trouble first: share of segments needing a retry, then failed articles
     voices.sort(key=lambda v: (-(v['retry_rate'] or 0), -v['failed'], v['voice']))
